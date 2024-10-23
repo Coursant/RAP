@@ -29,6 +29,7 @@ fern = {version = "0.6.2", features = ["colored"]}
 wait-timeout = "0.2.0"
 rustc-demangle = "0.1.21"
 colorful = "0.2.1"
+intervallum = "1.4.1"
 #stopwatch = "0.0.7"
 
 [features]
