@@ -15,7 +15,9 @@ extern crate rustc_metadata;
 extern crate rustc_middle;
 extern crate rustc_session;
 extern crate rustc_span;
+extern crate rustc_mir_dataflow;
 extern crate rustc_target;
+extern crate rustc_const_eval;
 
 use analysis::core::alias::mop::MopAlias;
 use analysis::core::call_graph::CallGraph;
