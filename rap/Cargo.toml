@@ -30,6 +30,7 @@ wait-timeout = "0.2.0"
 rustc-demangle = "0.1.21"
 colorful = "0.2.1"
 intervallum = "1.4.1"
+gcollections = "1.5.0"
 #stopwatch = "0.0.7"
 
 [features]

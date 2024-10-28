@@ -456,6 +456,7 @@ dependencies = [
  "chrono",
  "colorful",
  "fern",
+ "gcollections",
  "intervallum",
  "log",
  "rustc-demangle",
