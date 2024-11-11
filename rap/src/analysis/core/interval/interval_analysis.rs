@@ -2,6 +2,12 @@
 //!
 //! Currently, this pass only propagates scalar values.
 pub mod intervallattice;
+pub mod symbolic_value;
+pub mod path;
+pub mod expression;
+pub mod symbolic_domain;
+
+pub mod constant_value;
 use intervallattice::IntervalSet;
 use rustc_const_eval::const_eval::{throw_machine_stop_str, DummyMachine};
 use rustc_const_eval::interpret::{ImmTy, Immediate, InterpCx, OpTy, PlaceTy, Projectable};

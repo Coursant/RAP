@@ -23,11 +23,13 @@ extern crate tracing;
 use analysis::core::alias::mop::MopAlias;
 use analysis::core::call_graph::CallGraph;
 use analysis::core::dataflow::DataFlow;
+use analysis::core::interval::IntervalAnalysis;
 use analysis::rcanary::rCanary;
 use analysis::safedrop::SafeDrop;
 use analysis::senryx::SenryxCheck;
 use analysis::unsafety_isolation::{UigInstruction, UnsafetyIsolationCheck};
 use analysis::utils::show_mir::ShowMir;
+use interval::Interval;
 use rustc_data_structures::sync::Lrc;
 use rustc_driver::{Callbacks, Compilation};
 use rustc_interface::interface::Compiler;
@@ -242,5 +244,8 @@ pub fn start_analyzer(tcx: TyCtxt, callback: RapCallback) {
 
     if callback.is_callgraph_enabled() {
         CallGraph::new(tcx).start();
+    }
+    if true{
+        IntervalAnalysis::new(tcx).start();
     }
 }

@@ -1,26 +1,46 @@
 pub mod interval_analysis;
 
-use rustc_const_eval::const_eval::{throw_machine_stop_str, DummyMachine};
-use rustc_const_eval::interpret::{ImmTy, Immediate, InterpCx, OpTy, PlaceTy, Projectable};
-use rustc_data_structures::fx::FxHashMap;
-use rustc_hir::def::DefKind;
-use rustc_middle::bug;
-use rustc_middle::mir::interpret::{InterpResult, Scalar};
-use rustc_middle::mir::visit::{MutVisitor, PlaceContext, Visitor};
-use rustc_middle::mir::*;
-use rustc_middle::ty::layout::{HasParamEnv, LayoutOf};
-use rustc_middle::ty::{self, Ty, TyCtxt};
-use rustc_mir_dataflow::value_analysis::{
-    Map, PlaceIndex, State, TrackElem, ValueAnalysis, ValueAnalysisWrapper, ValueOrPlace,
-};
-use rustc_mir_dataflow::{lattice::FlatSet, Analysis, Results, ResultsVisitor};
-use rustc_span::DUMMY_SP;
-use rustc_target::abi::{Abi, FieldIdx, Size, VariantIdx, FIRST_VARIANT};
 
-struct IntervalAnalysis<'a, 'tcx> {
-    map: Map,
-    tcx: TyCtxt<'tcx>,
-    local_decls: &'a LocalDecls<'tcx>,
-    ecx: InterpCx<'tcx, DummyMachine>,
-    param_env: ty::ParamEnv<'tcx>,
+pub mod domain;
+use log::{debug, info};
+use rustc_hir::def::DefKind;
+use rustc_hir::def_id::DefId;
+use rustc_middle::ty::TyCtxt;
+use rustc_session::Session;
+use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::rc::Rc;
+pub struct IntervalAnalysis<'a, 'tcx> {
+    /// The central data structure of the compiler
+    pub tcx: TyCtxt<'tcx>,
+
+    /// Represents the data associated with a compilation session for a single crate
+
+    /// The entry function of the analysis
+    pub entry_point: DefId,
+
+    /// Stores the DefIds that have been already checked, to avoid redundant check
+    pub checked_def_ids: HashSet<DefId>,
+
+    /// Stores the Heaps that have been already dropped, to detect double-free, use-after-free, etc.
+    pub dropped_heaps: HashSet<Rc<SymbolicValue>>,
+
+    /// Cache for the Weak Topological Ordering
+    pub wto_cache: WtoCache<'tcx>,
+
+    /// Cache for the name of each DefId
+    pub function_name_cache: HashMap<DefId, Rc<String>>,
+
+    /// Customized options that may change the behavior of the analysis
+    pub analysis_options: AnalysisOption,
+
+    /// Generated diagnostic messages for each DefId
+    pub diagnostics_for: DiagnosticsForDefId<'compiler>,
+}
+impl IntervalAnalysis<'tcx, '_> {
+    pub fn new<'a, 'tcx>(
+        tcx: TyCtxt<'tcx>
+    ) -> Self {
+
+            }
 }
