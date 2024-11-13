@@ -13,7 +13,7 @@ use std::rc::Rc;
 pub struct IntervalAnalysis<'tcx> {
     /// The central data structure of the compiler
     pub tcx: TyCtxt<'tcx>,
-
+    
 
 }
 impl< 'tcx> IntervalAnalysis<'tcx> {
