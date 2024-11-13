@@ -1,7 +1,7 @@
 pub mod interval_analysis;
 
 
-pub mod domain;
+
 use log::{debug, info};
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
@@ -17,9 +17,5 @@ pub struct IntervalAnalysis<'tcx> {
 
 }
 impl< 'tcx> IntervalAnalysis<'tcx> {
-    pub fn new(
-        tcx: TyCtxt<'tcx>
-    ) -> Self {
 
-            }
 }
