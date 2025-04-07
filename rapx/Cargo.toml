@@ -1,0 +1,47 @@
+[package]
+name = "rapx"
+version = "0.1.8"
+edition = "2021"
+authors = ["Artisan-Lab <xuh@fudan.edu.cn>"]
+default-run = "rapx"
+license = "MPL-2.0"
+description = "A static analysis platform for use-after-free, memory leakage detection, etc"
+documentation = "https://artisan-lab.github.io/RAPx-Book/"
+homepage = "https://github.com/Artisan-Lab/RAPx"
+readme = "../README.md"
+
+[[bin]]
+name = "rapx"
+
+[[bin]]
+name = "cargo-rapx"
+
+[lib]
+name = "rapx"
+doctest = false
+
+[dependencies]
+lazy_static = "1.4"
+snafu = "0.7.0"
+chrono = "0.4.19"
+serde_json = "1.0.72"
+z3 = "0.12.1"
+log = "0.4.14"
+fern = { version = "0.6.2", features = ["colored"] }
+wait-timeout = "0.2.0"
+rustc-demangle = "0.1.21"
+colorful = "0.2.1"
+serde = "1.0.215"
+regex = "1.11.1"
+once_cell = "1.20.1"
+walkdir = "2"
+cargo_metadata  = "0.18"
+annotate-snippets = "0.11.4"
+petgraph = "0.7.0"
+if_chain = "1.0"
+
+[features]
+backtraces = ["snafu/backtraces", "snafu/backtraces-impl-backtrace-crate"]
+
+[package.metadata.rust-analyzer]
+rustc_private = true
