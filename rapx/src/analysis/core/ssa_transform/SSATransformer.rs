@@ -44,6 +44,7 @@ pub struct SSATransformer<'tcx> {
     pub essa_statements: HashMap<*const Statement<'tcx>, bool>,
     pub phi_def_id: DefId,
     pub essa_def_id: DefId,
+    pub ref_local_map: HashMap<Local, Local>,
     pub places_map: HashMap<Place<'tcx>, HashSet<Place<'tcx>>>,
     pub ssa_locals_map: HashMap<Place<'tcx>, HashSet<Place<'tcx>>>,
 }
@@ -130,6 +131,7 @@ impl<'tcx> SSATransformer<'tcx> {
             essa_statements: HashMap::default(),
             phi_def_id: ssa_def_id,
             essa_def_id: essa_def_id,
+            ref_local_map: HashMap::default(),
             places_map: HashMap::default(),
             ssa_locals_map: HashMap::default(),
         }
