@@ -26,6 +26,7 @@ use rustc_middle::{
 use rustc_span::source_map::Spanned;
 use rustc_span::sym::var;
 
+use core::borrow;
 use std::cell::RefCell;
 use std::fmt::Write;
 use std::rc::Rc;
@@ -174,6 +175,7 @@ where
                 BasicOpKind::Phi(_) => "Φ (Phi)".to_string(),
                 BasicOpKind::Use(_) => "Use".to_string(),
                 BasicOpKind::Call(c) => format!("Call({:?})", c.def_id),
+                BasicOpKind::Ref(r) => format!("Ref({:?})", r.borrowkind),
             };
             writeln!(
                 &mut dot,
@@ -805,6 +807,9 @@ where
                     Rvalue::Use(operend) => {
                         self.add_use_op(sink, inst, operend);
                     }
+                    Rvalue::Ref(_, borrowkind, place) => {
+                        self.add_ref_op(sink, inst, place, *borrowkind);
+                    }
                     _ => {}
                 }
             }
@@ -1215,6 +1220,37 @@ where
         // rap_trace!("{:?}add_binary_op{:?}\n", inst,sink);
         // ...
     }
+    fn add_ref_op(
+        &mut self,
+        sink: &'tcx Place<'tcx>,
+        inst: &'tcx Statement<'tcx>,
+        place: &'tcx Place<'tcx>,
+        borrowkind: BorrowKind,
+    ) {
+        rap_trace!("ref_op {:?}\n", inst);
+
+        let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
+
+        let source_node = self.add_varnode(place);
+
+        let sink_node = self.add_varnode(sink);
+
+        let refop = RefOp::new(IntervalType::Basic(BI), sink, inst, place, borrowkind);
+        let bop_index = self.oprs.len();
+        self.oprs.push(BasicOpKind::Ref(refop));
+
+        self.usemap.entry(place).or_default().insert(bop_index);
+
+        self.defmap.insert(sink, bop_index);
+
+        rap_trace!(
+            "add_ref_op: created RefOp from {:?} to {:?} at {:?}\n",
+            place,
+            sink,
+            inst
+        );
+    }
+
     fn fix_intersects(&mut self, component: &HashSet<&'tcx Place<'tcx>>) {
         for &place in component.iter() {
             // node.fix_intersects();
@@ -2004,6 +2040,7 @@ where
                 Some(SymbolicExpr::Unknown(UnknownReason::CannotParse))
             }
             BasicOpKind::Call(call_op) => todo!(),
+            BasicOpKind::Ref(ref_op) => todo!(),
         }
     }
     pub fn start_analyze_path_constraints(

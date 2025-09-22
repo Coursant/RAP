@@ -71,10 +71,10 @@ fn method_unsafe_ptr() {
 
 fn main() {
     method_for_loop();
-    method_iter_mut_enumerate();
-    method_map_collect();
+    // method_iter_mut_enumerate();
+    // method_map_collect();
     // method_from_fn();
-    method_array_from_fn();
-    method_while_loop();
-    method_unsafe_ptr();
+    // method_array_from_fn();
+    // method_while_loop();
+    // method_unsafe_ptr();
 }

@@ -14,8 +14,8 @@ use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::coverage::Op;
 use rustc_middle::mir::{
-    BasicBlock, BinOp, Const, Local, LocalDecl, Operand, Place, Rvalue, Statement, StatementKind,
-    Terminator, UnOp,
+    BasicBlock, BinOp, BorrowKind, Const, Local, LocalDecl, Operand, Place, Rvalue, Statement,
+    StatementKind, Terminator, UnOp,
 };
 use rustc_middle::ty::ScalarInt;
 use rustc_span::sym::no_default_passes;
@@ -278,6 +278,7 @@ pub enum BasicOpKind<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     Phi(PhiOp<'tcx, T>),
     Use(UseOp<'tcx, T>),
     Call(CallOp<'tcx, T>),
+    Ref(RefOp<'tcx, T>),
 }
 
 impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> fmt::Display for BasicOpKind<'tcx, T> {
@@ -290,6 +291,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> fmt::Display for BasicO
             BasicOpKind::Phi(op) => write!(f, "PhiOp: intersect {} sink:{:?} source:{:?} inst:{:?}  ",op.intersect,op.sink,op.sources,op.inst),
             BasicOpKind::Use(op) => write!(f, "UseOp: intersect {} sink:{:?} source:{:?} inst:{:?} ",op.intersect,op.sink,op.source,op.inst ),
             BasicOpKind::Call(op) => write!(f, "CallOp: intersect {} sink:{:?} args:{:?} inst:{:?}", op.intersect, op.sink, op.args, op.inst),
+            BasicOpKind::Ref(op) => write!(f, "RefOp: intersect {} sink:{:?} source:{:?} inst:{:?} borrowkind:{:?}", op.intersect, op.sink, op.source, op.inst, op.borrowkind),
         }
     }
 }
@@ -303,6 +305,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
             BasicOpKind::Phi(op) => op.eval(vars),
             BasicOpKind::Use(op) => op.eval(vars),
             BasicOpKind::Call(op) => op.eval(vars),
+            BasicOpKind::Ref(op) => op.eval(),
         }
     }
     pub fn get_type_name(&self) -> &'static str {
@@ -314,6 +317,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
             BasicOpKind::Phi(_) => "Phi",
             BasicOpKind::Use(_) => "Use",
             BasicOpKind::Call(_) => "Call",
+            BasicOpKind::Ref(_) => "Ref",
         }
     }
     pub fn get_sink(&self) -> &'tcx Place<'tcx> {
@@ -325,6 +329,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
             BasicOpKind::Phi(op) => op.sink,
             BasicOpKind::Use(op) => op.sink,
             BasicOpKind::Call(op) => op.sink,
+            BasicOpKind::Ref(op) => op.sink,
         }
     }
     pub fn get_instruction(&self) -> Option<&'tcx Statement<'tcx>> {
@@ -336,6 +341,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
             BasicOpKind::Phi(op) => Some(op.inst),
             BasicOpKind::Use(op) => Some(op.inst),
             BasicOpKind::Call(op) => None,
+            BasicOpKind::Ref(op) => Some(op.inst),
         }
     }
     pub fn get_intersect(&self) -> &IntervalType<'tcx, T> {
@@ -347,6 +353,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
             BasicOpKind::Phi(op) => &op.intersect,
             BasicOpKind::Use(op) => &op.intersect,
             BasicOpKind::Call(op) => &op.intersect,
+            BasicOpKind::Ref(op) => &op.intersect,
         }
     }
     pub fn op_fix_intersects(&mut self, v: &VarNode<'tcx, T>, sink: &VarNode<'tcx, T>) {
@@ -373,6 +380,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
             BasicOpKind::Phi(op) => op.intersect.set_range(new_intersect),
             BasicOpKind::Use(op) => op.intersect.set_range(new_intersect),
             BasicOpKind::Call(op) => op.intersect.set_range(new_intersect),
+            BasicOpKind::Ref(op) => op.intersect.set_range(new_intersect),
         }
     }
     pub fn get_intersect_mut(&mut self) -> &mut IntervalType<'tcx, T> {
@@ -384,6 +392,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
             BasicOpKind::Phi(op) => &mut op.intersect,
             BasicOpKind::Use(op) => &mut op.intersect,
             BasicOpKind::Call(op) => &mut op.intersect,
+            BasicOpKind::Ref(op) => &mut op.intersect,
         }
     }
 }
@@ -806,6 +815,35 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> PhiOp<'tcx, T> {
     }
     pub fn get_sources(&self) -> &[&'tcx Place<'tcx>] {
         &self.sources
+    }
+}
+#[derive(Debug, Clone)]
+pub struct RefOp<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
+    pub intersect: IntervalType<'tcx, T>,
+    pub sink: &'tcx Place<'tcx>,
+    pub inst: &'tcx Statement<'tcx>,
+    pub source: &'tcx Place<'tcx>,
+    pub borrowkind: BorrowKind,
+}
+impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> RefOp<'tcx, T> {
+    pub fn new(
+        intersect: IntervalType<'tcx, T>,
+        sink: &'tcx Place<'tcx>,
+        inst: &'tcx Statement<'tcx>,
+        source: &'tcx Place<'tcx>,
+        borrowkind: BorrowKind,
+    ) -> Self {
+        Self {
+            intersect,
+            sink,
+            inst,
+            source,
+            borrowkind,
+        }
+    }
+
+    pub fn eval(&self) -> Range<T> {
+        Range::default(T::min_value())
     }
 }
 #[derive(Debug, Clone)]

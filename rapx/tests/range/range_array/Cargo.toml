@@ -1,5 +1,5 @@
 [package]
-name = "range_3"
+name = "range_array"
 version = "0.1.0"
 edition = "2021"
 
