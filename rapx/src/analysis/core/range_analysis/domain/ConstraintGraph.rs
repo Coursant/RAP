@@ -27,6 +27,7 @@ use rustc_span::source_map::Spanned;
 use rustc_span::sym::var;
 
 use std::cell::RefCell;
+use std::fmt::Write;
 use std::rc::Rc;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -133,6 +134,87 @@ where
             switchbbs: HashMap::new(),
             const_func_place: HashMap::new(),
         }
+    }
+    pub fn to_dot(&self) -> String {
+        let mut dot = String::new();
+        let mut dot = String::new();
+        writeln!(&mut dot, "digraph ConstraintGraph {{").unwrap();
+        writeln!(&mut dot, "    layout=neato;").unwrap();
+
+        writeln!(&mut dot, "    rankdir=TB;").unwrap();
+        writeln!(&mut dot, "    ranksep=1.5;").unwrap(); // 增加層級間距
+        writeln!(&mut dot, "    nodesep=0.5;").unwrap(); // 增加同層節點間距
+
+        writeln!(&mut dot, "    edge [len=2.0];").unwrap(); // <-- 在這裡設定理想邊長
+
+        writeln!(&mut dot, "    node [fontname=\"Fira Code\"];").unwrap();
+
+        writeln!(&mut dot, "\n    // Variable Nodes").unwrap();
+        for (place, var_node) in &self.vars {
+            let place_id = format!("{:?}", place);
+            // let label = format!("{:?}\\n{:?}", place, var_node.interval);
+            let label = format!("{:?}", place);
+
+            writeln!(
+                &mut dot,
+                "    \"{}\" [label=\"{}\", shape=ellipse, style=filled, fillcolor=lightblue];",
+                place_id, label
+            )
+            .unwrap();
+        }
+
+        writeln!(&mut dot, "\n    // Operation Nodes").unwrap();
+        for (op_idx, op) in self.oprs.iter().enumerate() {
+            let op_id = format!("op_{}", op_idx);
+            let label = match op {
+                BasicOpKind::Unary(o) => format!("Unary({:?})", o.op),
+                BasicOpKind::Binary(o) => format!("Binary({:?})", o.op),
+                BasicOpKind::Essa(_) => "Essa".to_string(),
+                BasicOpKind::ControlDep(_) => "ControlDep".to_string(),
+                BasicOpKind::Phi(_) => "Φ (Phi)".to_string(),
+                BasicOpKind::Use(_) => "Use".to_string(),
+                BasicOpKind::Call(c) => format!("Call({:?})", c.def_id),
+            };
+            writeln!(
+                &mut dot,
+                "    \"{}\" [label=\"{}\", shape=box, style=filled, fillcolor=lightgrey];",
+                op_id, label
+            )
+            .unwrap();
+        }
+
+        writeln!(&mut dot, "\n    // Definition Edges (op -> var)").unwrap();
+        for (place, op_idx) in &self.defmap {
+            let place_id = format!("{:?}", place);
+            let op_id = format!("op_{}", op_idx);
+            writeln!(&mut dot, "    \"{}\" -> \"{}\";", op_id, place_id).unwrap();
+        }
+
+        writeln!(&mut dot, "\n    // Use Edges (var -> op)").unwrap();
+        for (place, op_indices) in &self.usemap {
+            let place_id = format!("{:?}", place);
+            for op_idx in op_indices {
+                let op_id = format!("op_{}", op_idx);
+                writeln!(&mut dot, "    \"{}\" -> \"{}\";", place_id, op_id).unwrap();
+            }
+        }
+
+        writeln!(&mut dot, "\n    // Symbolic Bound Edges (var -> op)").unwrap();
+        for (place, op_indices) in &self.symbmap {
+            let place_id = format!("{:?}", place);
+            for op_idx in op_indices {
+                let op_id = format!("op_{}", op_idx);
+                writeln!(
+                    &mut dot,
+                    "    \"{}\" -> \"{}\" [color=blue, style=dashed];",
+                    place_id, op_id
+                )
+                .unwrap();
+            }
+        }
+
+        writeln!(&mut dot, "}}").unwrap();
+        dot
     }
     pub fn build_final_vars(
         &mut self,

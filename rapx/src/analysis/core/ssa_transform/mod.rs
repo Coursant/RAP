@@ -9,20 +9,24 @@ pub mod Replacer;
 pub mod SSATransformer;
 
 use crate::{rap_info, rap_warn};
-use rustc_hir::def::DefKind;
-use rustc_hir::def_id::DefId;
-use rustc_hir::def_id::LocalDefId;
-use rustc_middle::mir::pretty::{write_mir_fn, PrettyPrintMirOptions};
-use rustc_middle::mir::*;
-use rustc_middle::ty::TyCtxt;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::fs;
-use std::fs::File;
-use std::io;
-use std::io::Cursor;
-use std::io::Write;
-use std::path::PathBuf;
+use rustc_hir::{
+    def::DefKind,
+    def_id::{DefId, LocalDefId},
+};
+use rustc_middle::{
+    mir::{
+        pretty::{self, MirWriter, PrettyPrintMirOptions},
+        *,
+    },
+    ty::TyCtxt,
+};
+use std::{
+    collections::{HashMap, HashSet},
+    fs::{self, File},
+    io::{self, Cursor, Write},
+    path::PathBuf,
+};
+
 pub struct SSATrans<'tcx> {
     pub tcx: TyCtxt<'tcx>,
     pub debug: bool,
@@ -129,8 +133,8 @@ pub fn print_diff<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, def_id: DefId) {
     write_mir_pretty(tcx, None, &mut w).unwrap();
     let mut file2 = File::create(&phi_mir_file_path).unwrap();
     let mut w2 = io::BufWriter::new(&mut file2);
-    let options = PrettyPrintMirOptions::from_cli(tcx);
-    write_mir_fn(tcx, body, &mut |_, _| Ok(()), &mut w2, options).unwrap();
+    let writer = pretty::MirWriter::new(tcx);
+    writer.write_mir_fn(body, &mut w2).unwrap();
 }
 pub fn print_mir_graph<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, def_id: DefId) {
     let dir_path = PathBuf::from("passrunner_mir_dot");
@@ -202,8 +206,8 @@ impl<'tcx> PassRunner<'tcx> {
 
     pub fn get_final_ssa_as_string(&self, body: &Body<'tcx>) -> String {
         let mut buffer2 = Cursor::new(Vec::new());
-        let options = PrettyPrintMirOptions::from_cli(self.tcx);
-        write_mir_fn(self.tcx, body, &mut |_, _| Ok(()), &mut buffer2, options).unwrap();
+        let writer = pretty::MirWriter::new(self.tcx);
+        writer.write_mir_fn(body, &mut buffer2).unwrap();
         let after_mir = String::from_utf8(buffer2.into_inner()).unwrap();
         after_mir
     }

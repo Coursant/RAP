@@ -394,10 +394,12 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 } => {
                     if let Operand::Constant(c) = func {
                         if let &ty::FnDef(id, ..) = c.ty().kind() {
+                            // for no_std crates without using alloc,
+                            // dealloc will be never found, thus call dealloc_opt here
                             if id == drop()
                                 || id == drop_in_place()
                                 || id == manually_drop()
-                                || id == dealloc()
+                                || dealloc_opt().map(|f| f == id).unwrap_or(false)
                             {
                                 cur_bb.drops.push(terminator.clone());
                             }
