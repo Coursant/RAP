@@ -41,6 +41,7 @@ pub struct ConstraintGraph<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     // Protected fields
     pub self_def_id: DefId,      // The DefId of the function being analyzed
     pub vars: VarNodes<'tcx, T>, // The variables of the source program
+    pub array_vars: VarNodes<'tcx, T>, // The array variables of the source program
     pub oprs: Vec<BasicOpKind<'tcx, T>>, // The operations of the source program
 
     // func: Option<Function>,             // Save the last Function analyzed
@@ -80,6 +81,7 @@ where
         Self {
             self_def_id,
             vars: VarNodes::new(),
+            array_vars: VarNodes::new(),
             oprs: GenOprs::new(),
             // func: None,
             defmap: DefMap::new(),
@@ -110,6 +112,7 @@ where
         Self {
             self_def_id,
             vars: VarNodes::new(),
+            array_vars: VarNodes::new(),
             oprs: GenOprs::new(),
             // func: None,
             defmap: DefMap::new(),

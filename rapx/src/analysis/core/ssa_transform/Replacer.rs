@@ -7,6 +7,7 @@ use rustc_hir::def_id::DefIdMap;
 use rustc_index::IndexVec;
 use rustc_middle::ty::TyCtxt;
 use rustc_middle::{mir::*, ty::GenericArgs};
+use rustc_span::sym::new;
 use std::collections::{HashMap, HashSet, VecDeque};
 // use stable_mir::mir::FieldIdx;
 // use stable_mir::ty::ConstantKind;
@@ -649,7 +650,9 @@ impl<'tcx> Replacer<'tcx> {
 
         if let Some(Some(reaching_local)) = self.ssatransformer.reaching_def.get(&place.local) {
             let local = reaching_local.clone();
-            *place = Place::from(local);
+            let mut new_place: Place<'_> = Place::from(local);
+            new_place.projection = place.projection;
+            *place = new_place;
         } else {
         }
     }
@@ -722,8 +725,8 @@ impl<'tcx> Replacer<'tcx> {
             return;
         }
         let new_local = Local::from_usize(self.ssatransformer.local_index);
-        let new_place: Place<'_> = Place::from(new_local);
-
+        let mut new_place: Place<'_> = Place::from(new_local);
+        new_place.projection = place.projection;
         *place = new_place.clone();
 
         //find the original local defination assign statement

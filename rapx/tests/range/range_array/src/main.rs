@@ -1,7 +1,19 @@
 fn method_for_loop() {
+    let mut read_element = 0;
     let mut a = [0; 10];
     for i in 0..a.len() {
+        read_element = a[i];
+
         a[i] = i as i32;
+
+    }
+    // println!("method_for_loop: {:?}", a);
+}
+fn method_for_slice_loop() {
+    let mut a = [0; 10];
+    let slice = &mut a[1..4];
+    for i in 0..slice.len() {
+        slice[i] = i as i32;
     }
     // println!("method_for_loop: {:?}", a);
 }
