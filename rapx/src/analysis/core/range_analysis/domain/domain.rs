@@ -1004,23 +1004,28 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> RefOp<'tcx, T> {
     }
 
     pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<T> {
-        if let source = self.source {
-            let range = vars[source].get_range().clone();
-            let mut result = Range::default(T::min_value());
+        let var_node = vars
+            .iter()
+            .find(|(place, _)| place.local == self.source.local)
+            .map(|(_, node)| node);
+        rap_trace!("RefOp eval: searching for {:?}\n", var_node);
+        if let Some(var_node) = var_node {
+            let range = var_node.get_range().clone();
+
             rap_trace!(
-                "RefOp eval: {:?} {} intersectwith {}-> {}\n",
-                source,
+                "RefOp eval: {:?} {} intersectwith {}\n",
+                self.source,
                 self.intersect.get_range(),
-                range,
-                result
+                range
             );
-            if range.is_regular() {
-                result = range
-            } else {
-            }
-            result
+
+            range
         } else {
-            // If no source is provided, return the intersect range
+            rap_trace!(
+                "RefOp eval: {:?} not found, returning intersect {}\n",
+                self.source,
+                self.intersect.get_range()
+            );
             self.intersect.get_range().clone()
         }
     }
