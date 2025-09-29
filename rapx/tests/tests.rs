@@ -263,7 +263,7 @@ fn test_range_analysis() {
 
     let expected_ranges = vec![
         "_1 => Regular [0, 0]",
-        " _2 => Regular [Min, Max]",
+        "_2 => Regular [Min, Max]",
         "_4 => Regular [0, 100]",
         "_6 => Regular [0, 99]",
         "_11 => Regular [1, 99]",

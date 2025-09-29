@@ -652,6 +652,7 @@ impl<'tcx> Replacer<'tcx> {
             let local = reaching_local.clone();
             let mut new_place: Place<'_> = Place::from(local);
             new_place.projection = place.projection;
+
             *place = new_place;
         } else {
         }

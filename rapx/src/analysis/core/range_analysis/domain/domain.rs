@@ -279,6 +279,7 @@ pub enum BasicOpKind<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     Use(UseOp<'tcx, T>),
     Call(CallOp<'tcx, T>),
     Ref(RefOp<'tcx, T>),
+    Aggregate(AggregateOp<'tcx, T>),
 }
 
 impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> fmt::Display for BasicOpKind<'tcx, T> {
@@ -292,6 +293,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> fmt::Display for BasicO
             BasicOpKind::Use(op) => write!(f, "UseOp: intersect {} sink:{:?} source:{:?} inst:{:?} ",op.intersect,op.sink,op.source,op.inst ),
             BasicOpKind::Call(op) => write!(f, "CallOp: intersect {} sink:{:?} args:{:?} inst:{:?}", op.intersect, op.sink, op.args, op.inst),
             BasicOpKind::Ref(op) => write!(f, "RefOp: intersect {} sink:{:?} source:{:?} inst:{:?} borrowkind:{:?}", op.intersect, op.sink, op.source, op.inst, op.borrowkind),
+            BasicOpKind::Aggregate(op) => write!(f, "AggregateOp: intersect {} sink:{:?} operands:{:?} inst:{:?}", op.intersect, op.sink, op.operands, op.inst),
         }
     }
 }
@@ -305,7 +307,8 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
             BasicOpKind::Phi(op) => op.eval(vars),
             BasicOpKind::Use(op) => op.eval(vars),
             BasicOpKind::Call(op) => op.eval(vars),
-            BasicOpKind::Ref(op) => op.eval(),
+            BasicOpKind::Ref(op) => op.eval(vars),
+            BasicOpKind::Aggregate(op) => op.eval(vars),
         }
     }
     pub fn get_type_name(&self) -> &'static str {
@@ -318,6 +321,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
             BasicOpKind::Use(_) => "Use",
             BasicOpKind::Call(_) => "Call",
             BasicOpKind::Ref(_) => "Ref",
+            BasicOpKind::Aggregate(_) => "Aggregate",
         }
     }
     pub fn get_sink(&self) -> &'tcx Place<'tcx> {
@@ -330,6 +334,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
             BasicOpKind::Use(op) => op.sink,
             BasicOpKind::Call(op) => op.sink,
             BasicOpKind::Ref(op) => op.sink,
+            BasicOpKind::Aggregate(op) => op.sink,
         }
     }
     pub fn get_instruction(&self) -> Option<&'tcx Statement<'tcx>> {
@@ -342,6 +347,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
             BasicOpKind::Use(op) => Some(op.inst),
             BasicOpKind::Call(op) => None,
             BasicOpKind::Ref(op) => Some(op.inst),
+            BasicOpKind::Aggregate(op) => Some(op.inst),
         }
     }
     pub fn get_intersect(&self) -> &IntervalType<'tcx, T> {
@@ -354,6 +360,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
             BasicOpKind::Use(op) => &op.intersect,
             BasicOpKind::Call(op) => &op.intersect,
             BasicOpKind::Ref(op) => &op.intersect,
+            BasicOpKind::Aggregate(op) => &op.intersect,
         }
     }
     pub fn op_fix_intersects(&mut self, v: &VarNode<'tcx, T>, sink: &VarNode<'tcx, T>) {
@@ -381,6 +388,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
             BasicOpKind::Use(op) => op.intersect.set_range(new_intersect),
             BasicOpKind::Call(op) => op.intersect.set_range(new_intersect),
             BasicOpKind::Ref(op) => op.intersect.set_range(new_intersect),
+            BasicOpKind::Aggregate(op) => op.intersect.set_range(new_intersect),
         }
     }
     pub fn get_intersect_mut(&mut self) -> &mut IntervalType<'tcx, T> {
@@ -393,6 +401,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
             BasicOpKind::Use(op) => &mut op.intersect,
             BasicOpKind::Call(op) => &mut op.intersect,
             BasicOpKind::Ref(op) => &mut op.intersect,
+            BasicOpKind::Aggregate(op) => &mut op.intersect,
         }
     }
 }
@@ -403,6 +412,7 @@ pub struct CallOp<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     pub inst: &'tcx Terminator<'tcx>,
     pub args: Vec<Operand<'tcx>>,
     pub def_id: DefId,
+    pub fun_path: String,
 }
 
 impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
@@ -415,6 +425,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
         inst: &'tcx Terminator<'tcx>,
         args: Vec<Operand<'tcx>>,
         def_id: DefId,
+        fun_path: String,
     ) -> Self {
         Self {
             intersect,
@@ -422,6 +433,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
             inst,
             args,
             def_id,
+            fun_path,
         }
     }
 
@@ -434,6 +446,67 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
         cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
         vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
     ) -> Range<T> {
+        match self.fun_path.as_str() {
+            "std::iter::IntoIterator::into_iter" => match self.args.first() {
+                Some(Operand::Copy(place)) | Some(Operand::Move(place)) => {
+                    rap_trace!(
+                        "Iterator detected on place {:?}, returning its range",
+                        place
+                    );
+                    if let Some(var_node) = caller_vars.get(place) {
+                        let range = var_node.get_range().clone();
+                        rap_trace!(
+                            "Iterator detected on place {:?}, returning its range: {}",
+                            place,
+                            range
+                        );
+                        return range;
+                    }
+                }
+                _ => {}
+            },
+            "core::slice::<impl [T]>::len" => {
+                let mut result = Range::default(T::min_value());
+                match self.args.last() {
+                    Some(Operand::Copy(place)) | Some(Operand::Move(place)) => {
+                        let range = caller_vars[place].get_range().clone();
+                        let len = range.get_upper().clone() - range.get_lower().clone();
+                        result = Range::new(len.clone(), len.clone(), RangeType::Regular);
+                    }
+                    Some(Operand::Constant(c)) => {}
+                    None => {}
+                }
+                rap_trace!(
+                    "len() detected on place {:?}, returning its range: {}",
+                    self.sink,
+                    result
+                );
+                return result;
+            }
+            "std::ops::IndexMut::index_mut" => {
+                let mut result = Range::default(T::min_value());
+
+                match self.args.last() {
+                    Some(Operand::Copy(place)) | Some(Operand::Move(place)) => {
+                        result = caller_vars[place].get_range().clone();
+                    }
+                    Some(Operand::Constant(c)) => {}
+                    None => {}
+                }
+
+                rap_trace!(
+                    "IndexMut detected on place {:?}, returning its range: {}",
+                    self.sink,
+                    result
+                );
+                return result;
+            }
+            "core::panicking::panic" | "std::panicking::panic" => {
+                rap_trace!("Panic call detected, returning bottom range.");
+                return Range::new(T::max_value(), T::min_value(), RangeType::Empty);
+            }
+            _ => {}
+        }
         // 1. Find the callee's ConstraintGraph in the map.
         if let Some(rc_callee_cg_cell) = cg_map.get(&self.def_id) {
             rap_debug!(
@@ -559,6 +632,94 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
         Range::new(T::min_value(), T::max_value(), RangeType::Regular)
     }
 }
+#[derive(Debug, Clone)]
+pub enum AggregateOperand<'tcx> {
+    Place(&'tcx Place<'tcx>),
+    Const(Const<'tcx>),
+}
+#[derive(Debug, Clone)]
+
+pub struct AggregateOp<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
+    pub intersect: IntervalType<'tcx, T>,
+    pub sink: &'tcx Place<'tcx>,
+    pub inst: &'tcx Statement<'tcx>,
+    pub operands: Vec<AggregateOperand<'tcx>>,
+    pub unique_adt: usize,
+}
+
+impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> AggregateOp<'tcx, T> {
+    pub fn new(
+        intersect: IntervalType<'tcx, T>,
+        sink: &'tcx Place<'tcx>,
+        inst: &'tcx Statement<'tcx>,
+        operands: Vec<AggregateOperand<'tcx>>,
+        unique_adt: usize,
+    ) -> Self {
+        Self {
+            intersect,
+            sink,
+            inst,
+            operands,
+            unique_adt,
+        }
+    }
+
+    pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<T> {
+        if self.operands.is_empty() {
+            return self.intersect.get_range().clone();
+        }
+
+        let mut result: Range<T> = Range::default(T::min_value());
+        match self.unique_adt {
+            0 => {
+                // If unique_adt is 0, we assume it's a regular array or slice.
+                // We can use the first operand's range as the initial result.
+                match self.operands.first() {
+                    Some(AggregateOperand::Place(place)) => {
+                        let range = vars[*place].get_range().clone();
+                        result = range;
+                    }
+                    Some(AggregateOperand::Const(c)) => {
+                        result = Range::new(
+                            T::from_const(c).unwrap_or(T::min_value()),
+                            T::from_const(c).unwrap_or(T::max_value()),
+                            RangeType::Regular,
+                        );
+                    }
+                    None => {}
+                }
+            }
+            1 => {
+                // If unique_adt is 1, we assume it's a Range with two operands.
+                let mut lower = T::min_value();
+                let mut upper = T::max_value();
+                match self.operands.first() {
+                    Some(AggregateOperand::Place(place)) => {
+                        lower = vars[*place].get_range().get_lower().clone();
+                    }
+                    Some(AggregateOperand::Const(c)) => {
+                        lower = T::from_const(c).unwrap_or(T::min_value());
+                    }
+                    None => {}
+                }
+                match self.operands.last() {
+                    Some(AggregateOperand::Place(place)) => {
+                        upper = vars[*place].get_range().get_upper().clone();
+                    }
+                    Some(AggregateOperand::Const(c)) => {
+                        upper = T::from_const(c).unwrap_or(T::max_value());
+                    }
+                    None => {}
+                }
+
+                result = Range::new(lower, upper, RangeType::Regular);
+            }
+            _ => {}
+        }
+        result
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct UseOp<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     pub intersect: IntervalType<'tcx, T>,
@@ -842,8 +1003,26 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> RefOp<'tcx, T> {
         }
     }
 
-    pub fn eval(&self) -> Range<T> {
-        Range::default(T::min_value())
+    pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<T> {
+        if let source = self.source {
+            let range = vars[source].get_range().clone();
+            let mut result = Range::default(T::min_value());
+            rap_trace!(
+                "RefOp eval: {:?} {} intersectwith {}-> {}\n",
+                source,
+                self.intersect.get_range(),
+                range,
+                result
+            );
+            if range.is_regular() {
+                result = range
+            } else {
+            }
+            result
+        } else {
+            // If no source is provided, return the intersect range
+            self.intersect.get_range().clone()
+        }
     }
 }
 #[derive(Debug, Clone)]

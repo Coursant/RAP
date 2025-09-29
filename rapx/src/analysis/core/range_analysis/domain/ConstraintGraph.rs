@@ -17,6 +17,7 @@ use once_cell::sync::{Lazy, OnceCell};
 // use rand::Rng;
 use rustc_abi::FieldIdx;
 use rustc_data_structures::fx::FxHashMap;
+use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_hir::{def, def_id::DefId};
 use rustc_index::IndexVec;
 use rustc_middle::{
@@ -35,12 +36,15 @@ use std::{
     default,
     fmt::Debug,
 };
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 
 pub struct ConstraintGraph<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
+    pub tcx: TyCtxt<'tcx>,
     // Protected fields
     pub self_def_id: DefId,      // The DefId of the function being analyzed
     pub vars: VarNodes<'tcx, T>, // The variables of the source program
+    pub local_inserted: HashSet<Local>,
+
     pub array_vars: VarNodes<'tcx, T>, // The array variables of the source program
     pub oprs: Vec<BasicOpKind<'tcx, T>>, // The operations of the source program
 
@@ -68,6 +72,8 @@ pub struct ConstraintGraph<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     pub rerurn_places: HashSet<&'tcx Place<'tcx>>,
     pub switchbbs: HashMap<BasicBlock, (Place<'tcx>, Place<'tcx>)>,
     pub const_func_place: HashMap<&'tcx Place<'tcx>, usize>,
+    pub func_without_mir: HashMap<DefId, String>,
+    pub unique_adt_path: HashMap<String, usize>,
 }
 
 impl<'tcx, T> ConstraintGraph<'tcx, T>
@@ -77,10 +83,15 @@ where
     pub fn convert_const(c: &Const) -> Option<T> {
         T::from_const(c)
     }
-    pub fn new(self_def_id: DefId, essa: DefId, ssa: DefId) -> Self {
+    pub fn new(tcx: TyCtxt<'tcx>, self_def_id: DefId, essa: DefId, ssa: DefId) -> Self {
+        let mut unique_adt_path: HashMap<String, usize> = HashMap::new();
+        unique_adt_path.insert("std::ops::Range".to_string(), 1);
+
         Self {
+            tcx,
             self_def_id,
             vars: VarNodes::new(),
+            local_inserted: HashSet::new(),
             array_vars: VarNodes::new(),
             oprs: GenOprs::new(),
             // func: None,
@@ -106,12 +117,19 @@ where
             rerurn_places: HashSet::new(),
             switchbbs: HashMap::new(),
             const_func_place: HashMap::new(),
+            func_without_mir: HashMap::new(),
+            unique_adt_path: unique_adt_path,
         }
     }
-    pub fn new_without_ssa(self_def_id: DefId) -> Self {
+    pub fn new_without_ssa(tcx: TyCtxt<'tcx>, self_def_id: DefId) -> Self {
+        let mut unique_adt_path: HashMap<String, usize> = HashMap::new();
+        unique_adt_path.insert("std::ops::Range".to_string(), 1);
         Self {
+            tcx,
             self_def_id,
             vars: VarNodes::new(),
+            local_inserted: HashSet::new(),
+
             array_vars: VarNodes::new(),
             oprs: GenOprs::new(),
             // func: None,
@@ -137,37 +155,44 @@ where
             rerurn_places: HashSet::new(),
             switchbbs: HashMap::new(),
             const_func_place: HashMap::new(),
+            func_without_mir: HashMap::new(),
+            unique_adt_path: unique_adt_path,
         }
     }
     pub fn to_dot(&self) -> String {
         let mut dot = String::new();
-        let mut dot = String::new();
         writeln!(&mut dot, "digraph ConstraintGraph {{").unwrap();
+
+        // 布局参数
         writeln!(&mut dot, "    layout=neato;").unwrap();
-
+        writeln!(&mut dot, "    overlap=false;").unwrap();
+        writeln!(&mut dot, "    splines=true;").unwrap();
+        writeln!(&mut dot, "    sep=\"+1.0\";").unwrap();
         writeln!(&mut dot, "    rankdir=TB;").unwrap();
-        writeln!(&mut dot, "    ranksep=1.5;").unwrap(); // 增加層級間距
-        writeln!(&mut dot, "    nodesep=0.5;").unwrap(); // 增加同層節點間距
-
-        writeln!(&mut dot, "    edge [len=2.0];").unwrap(); // <-- 在這裡設定理想邊長
-
+        writeln!(&mut dot, "    ranksep=1.8;").unwrap();
+        writeln!(&mut dot, "    nodesep=0.8;").unwrap();
+        writeln!(&mut dot, "    edge [len=2.0];").unwrap();
         writeln!(&mut dot, "    node [fontname=\"Fira Code\"];").unwrap();
 
+        // 变量节点
         writeln!(&mut dot, "\n    // Variable Nodes").unwrap();
+        writeln!(&mut dot, "    subgraph cluster_vars {{").unwrap();
+        writeln!(&mut dot, "        rank=same;").unwrap(); // 把变量放在同一层
         for (place, var_node) in &self.vars {
             let place_id = format!("{:?}", place);
-            // let label = format!("{:?}\\n{:?}", place, var_node.interval);
             let label = format!("{:?}", place);
-
             writeln!(
-                &mut dot,
-                "    \"{}\" [label=\"{}\", shape=ellipse, style=filled, fillcolor=lightblue];",
-                place_id, label
-            )
-            .unwrap();
+            &mut dot,
+            "        \"{}\" [label=\"{}\", shape=ellipse, style=filled, fillcolor=lightblue, width=1.2, fixedsize=false];",
+            place_id, label
+        ).unwrap();
         }
+        writeln!(&mut dot, "    }}").unwrap();
 
+        // 操作节点
         writeln!(&mut dot, "\n    // Operation Nodes").unwrap();
+        writeln!(&mut dot, "    subgraph cluster_ops {{").unwrap();
+        writeln!(&mut dot, "        rank=same;").unwrap(); // 操作放另一层
         for (op_idx, op) in self.oprs.iter().enumerate() {
             let op_id = format!("op_{}", op_idx);
             let label = match op {
@@ -179,40 +204,36 @@ where
                 BasicOpKind::Use(_) => "Use".to_string(),
                 BasicOpKind::Call(c) => format!("Call({:?})", c.def_id),
                 BasicOpKind::Ref(r) => format!("Ref({:?})", r.borrowkind),
+                BasicOpKind::Aggregate(r) => format!("AggregateOp({:?})", r.unique_adt),
             };
             writeln!(
-                &mut dot,
-                "    \"{}\" [label=\"{}\", shape=box, style=filled, fillcolor=lightgrey];",
-                op_id, label
-            )
-            .unwrap();
+            &mut dot,
+            "        \"{}\" [label=\"{}\", shape=box, style=filled, fillcolor=lightgrey, width=1.5, fixedsize=false];",
+            op_id, label
+        ).unwrap();
         }
+        writeln!(&mut dot, "    }}").unwrap();
 
+        // Edges
         writeln!(&mut dot, "\n    // Definition Edges (op -> var)").unwrap();
         for (place, op_idx) in &self.defmap {
-            let place_id = format!("{:?}", place);
-            let op_id = format!("op_{}", op_idx);
-            writeln!(&mut dot, "    \"{}\" -> \"{}\";", op_id, place_id).unwrap();
+            writeln!(&mut dot, "    \"op_{}\" -> \"{:?}\";", op_idx, place).unwrap();
         }
 
         writeln!(&mut dot, "\n    // Use Edges (var -> op)").unwrap();
         for (place, op_indices) in &self.usemap {
-            let place_id = format!("{:?}", place);
             for op_idx in op_indices {
-                let op_id = format!("op_{}", op_idx);
-                writeln!(&mut dot, "    \"{}\" -> \"{}\";", place_id, op_id).unwrap();
+                writeln!(&mut dot, "    \"{:?}\" -> \"op_{}\";", place, op_idx).unwrap();
             }
         }
 
         writeln!(&mut dot, "\n    // Symbolic Bound Edges (var -> op)").unwrap();
         for (place, op_indices) in &self.symbmap {
-            let place_id = format!("{:?}", place);
             for op_idx in op_indices {
-                let op_id = format!("op_{}", op_idx);
                 writeln!(
                     &mut dot,
-                    "    \"{}\" -> \"{}\" [color=blue, style=dashed];",
-                    place_id, op_id
+                    "    \"{:?}\" -> \"op_{}\" [color=blue, style=dashed];",
+                    place, op_idx
                 )
                 .unwrap();
             }
@@ -221,6 +242,7 @@ where
         writeln!(&mut dot, "}}").unwrap();
         dot
     }
+
     pub fn build_final_vars(
         &mut self,
         places_map: &HashMap<Place<'tcx>, HashSet<Place<'tcx>>>,
@@ -382,6 +404,25 @@ where
 
         node_ref
     }
+    // pub fn add_varnode(&mut self, v: &'tcx Place<'tcx>) -> &mut VarNode<'tcx, T> {
+    //     if !self.local_inserted.contains(&v.local) {
+    //         let node = VarNode::new(v);
+    //         let node_ref: &mut VarNode<'tcx, T> = self.vars.entry(v).or_insert(node);
+    //         self.usemap.entry(v).or_insert(HashSet::new());
+
+    //         self.local_inserted.insert(v.local);
+    //         return node_ref;
+    //     } else {
+    //         let first_place_key = self
+    //             .vars
+    //             .keys()
+    //             .find(|place_ref| place_ref.local == v.local)
+    //             .copied()
+    //             .unwrap();
+
+    //         self.vars.get_mut(first_place_key).unwrap()
+    //     }
+    // }
 
     pub fn build_graph(&mut self, body: &'tcx Body<'tcx>) {
         self.arg_count = body.arg_count;
@@ -760,67 +801,81 @@ where
     }
     pub fn build_operations(&mut self, inst: &'tcx Statement<'tcx>, block: BasicBlock) {
         match &inst.kind {
-            StatementKind::Assign(box (sink, rvalue)) => {
-                match rvalue {
-                    Rvalue::BinaryOp(op, box (op1, op2)) => match op {
-                        BinOp::Add
-                        | BinOp::Sub
-                        | BinOp::Mul
-                        | BinOp::Div
-                        | BinOp::Rem
-                        | BinOp::AddUnchecked => {
-                            self.add_binary_op(sink, inst, op1, op2, *op);
-                        }
-                        BinOp::AddWithOverflow => {
-                            self.add_binary_op(sink, inst, op1, op2, *op);
-                        }
-                        BinOp::SubUnchecked => {
-                            self.add_binary_op(sink, inst, op1, op2, *op);
-                        }
-                        BinOp::SubWithOverflow => {
-                            self.add_binary_op(sink, inst, op1, op2, *op);
-                        }
-                        BinOp::MulUnchecked => {
-                            self.add_binary_op(sink, inst, op1, op2, *op);
-                        }
-                        BinOp::MulWithOverflow => {
-                            self.add_binary_op(sink, inst, op1, op2, *op);
-                        }
+            StatementKind::Assign(box (sink, rvalue)) => match rvalue {
+                Rvalue::BinaryOp(op, box (op1, op2)) => match op {
+                    BinOp::Add
+                    | BinOp::Sub
+                    | BinOp::Mul
+                    | BinOp::Div
+                    | BinOp::Rem
+                    | BinOp::AddUnchecked => {
+                        self.add_binary_op(sink, inst, op1, op2, *op);
+                    }
+                    BinOp::AddWithOverflow => {
+                        self.add_binary_op(sink, inst, op1, op2, *op);
+                    }
+                    BinOp::SubUnchecked => {
+                        self.add_binary_op(sink, inst, op1, op2, *op);
+                    }
+                    BinOp::SubWithOverflow => {
+                        self.add_binary_op(sink, inst, op1, op2, *op);
+                    }
+                    BinOp::MulUnchecked => {
+                        self.add_binary_op(sink, inst, op1, op2, *op);
+                    }
+                    BinOp::MulWithOverflow => {
+                        self.add_binary_op(sink, inst, op1, op2, *op);
+                    }
 
-                        _ => {}
-                    },
-                    Rvalue::UnaryOp(unop, operand) => {
-                        self.add_unary_op(sink, inst, operand, *unop);
-                    }
-                    Rvalue::Aggregate(kind, operends) => {
-                        match **kind {
-                            AggregateKind::Adt(def_id, _, _, _, _) => {
-                                if def_id == self.essa {
-                                    self.add_essa_op(sink, inst, operends, block);
-                                    // rap_trace!("Adt{:?}\n", operends);
-                                }
-                                if def_id == self.ssa {
-                                    self.add_ssa_op(sink, inst, operends);
-                                    // rap_trace!("Adt{:?}\n", operends);
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    Rvalue::Use(operend) => {
-                        self.add_use_op(sink, inst, operend);
-                    }
-                    Rvalue::Ref(_, borrowkind, place) => {
-                        self.add_ref_op(sink, inst, place, *borrowkind);
-                    }
                     _ => {}
+                },
+                Rvalue::UnaryOp(unop, operand) => {
+                    self.add_unary_op(sink, inst, operand, *unop);
                 }
-            }
+                Rvalue::Aggregate(kind, operends) => match **kind {
+                    AggregateKind::Adt(def_id, _, _, _, _) => match def_id {
+                        _ if def_id == self.essa => self.add_essa_op(sink, inst, operends, block),
+                        _ if def_id == self.ssa => self.add_ssa_op(sink, inst, operends),
+                        _ => match self.unique_adt_handler(def_id) {
+                            1 => {
+                                self.add_aggregate_op(sink, inst, operends, 1);
+                            }
+                            _ => {
+                                rap_trace!(
+            "AggregateKind::Adt with def_id {:?} in statement {:?} is not handled specially.\n",
+            def_id,
+            inst
+        );
+                            }
+                        },
+                    },
+                    _ => {}
+                },
+                Rvalue::Use(operend) => {
+                    self.add_use_op(sink, inst, operend);
+                }
+                Rvalue::Ref(_, borrowkind, place) => {
+                    self.add_ref_op(sink, inst, place, *borrowkind);
+                }
+                _ => {}
+            },
             _ => {}
         }
     }
     // ... inside your struct impl ...
-
+    fn unique_adt_handler(&mut self, def_id: DefId) -> usize {
+        let adt_path = self.tcx.def_path_str(def_id);
+        rap_trace!("adt_path: {:?}\n", adt_path);
+        if self.unique_adt_path.contains_key(&adt_path) {
+            rap_trace!(
+                "unique_adt_handler for def_id: {:?} -> {}\n",
+                def_id,
+                adt_path
+            );
+            return *self.unique_adt_path.get(&adt_path).unwrap();
+        }
+        0
+    }
     /// Adds a function call operation to the graph.
     fn add_call_op(
         &mut self,
@@ -836,11 +891,25 @@ where
         // Convert Operand arguments to Place arguments.
         // An Operand can be a Constant or a moved/copied Place.
         // We only care about Places for our analysis.
+        let mut path = String::new();
         let mut func_def_id = None;
         if let Operand::Constant(box const_operand) = func {
             let fn_ty = const_operand.ty();
             if let ty::TyKind::FnDef(def_id, _substs) = fn_ty.kind() {
                 // Found the DefId for a direct function call!
+                rap_debug!("fn_ty: {:?}\n", fn_ty);
+                if def_id.krate != LOCAL_CRATE {
+                    path = self.tcx.def_path_str(*def_id);
+
+                    self.func_without_mir.insert(*def_id, path.clone());
+                    rap_debug!("called external/no-MIR fn: {:?} -> {}", def_id, path);
+                }
+                // if !self.tcx.is_mir_available(*def_id) {
+                //     path = self.tcx.def_path_str(*def_id);
+
+                //     self.func_without_mir.insert(*def_id, path.clone());
+                //     rap_debug!("called external/no-MIR fn: {:?} -> {}", def_id, path);
+                // }
                 func_def_id = Some(def_id);
             }
         }
@@ -892,6 +961,7 @@ where
                 terminator, // Pass the allocated dummy statement
                 arg_operands,
                 *func_def_id.unwrap(), // Use the DefId if available
+                path,
             );
             rap_debug!("call_op: {:?}\n", call_op);
             let bop_index = self.oprs.len();
@@ -1111,6 +1181,76 @@ where
             self.defmap.insert(sink, bop_index);
         }
     }
+    pub fn add_aggregate_op(
+        &mut self,
+        sink: &'tcx Place<'tcx>,
+        inst: &'tcx Statement<'tcx>,
+        operands: &'tcx IndexVec<FieldIdx, Operand<'tcx>>,
+        unique_adt: usize,
+    ) {
+        rap_trace!("aggregate_op {:?}\n", inst);
+
+        let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
+        let mut agg_operands: Vec<AggregateOperand<'tcx>> = Vec::with_capacity(operands.len());
+
+        for operand in operands {
+            match operand {
+                Operand::Copy(place) | Operand::Move(place) => {
+                    if sink.local == RETURN_PLACE && sink.projection.is_empty() {
+                        self.rerurn_places.insert(place);
+                        self.add_varnode(sink);
+                        rap_debug!("add_return_place {:?}\n", place);
+                    } else {
+                        self.add_varnode(place);
+                        rap_trace!("addvar_in_aggregate_op {:?}\n", place);
+                        agg_operands.push(AggregateOperand::Place(place));
+                    }
+                }
+                Operand::Constant(c) => {
+                    rap_trace!("add_constant_aggregate_op {:?}\n", c);
+                    agg_operands.push(AggregateOperand::Const(c.const_));
+
+                    let sink_node = self.add_varnode(sink);
+                    if let Some(value) = Self::convert_const(&c.const_) {
+                        sink_node.set_range(Range::new(
+                            value.clone(),
+                            value.clone(),
+                            RangeType::Regular,
+                        ));
+                        rap_trace!("set_const {:?} value: {:?}\n", sink_node, value);
+                    } else {
+                        sink_node.set_range(Range::default(T::min_value()));
+                    }
+                }
+            }
+        }
+
+        if agg_operands.is_empty() {
+            rap_trace!("aggregate_op has no operands, skipping\n");
+            return;
+        }
+
+        let agg_op = AggregateOp::new(
+            IntervalType::Basic(BI),
+            sink,
+            inst,
+            agg_operands,
+            unique_adt,
+        );
+        let bop_index = self.oprs.len();
+        self.oprs.push(BasicOpKind::Aggregate(agg_op));
+
+        for operand in operands {
+            if let Operand::Copy(place) | Operand::Move(place) = operand {
+                self.usemap.entry(place).or_default().insert(bop_index);
+            }
+        }
+
+        self.defmap.insert(sink, bop_index);
+
+        self.add_varnode(sink);
+    }
+
     fn add_unary_op(
         &mut self,
         sink: &'tcx Place<'tcx>,
@@ -2044,6 +2184,7 @@ where
             }
             BasicOpKind::Call(call_op) => todo!(),
             BasicOpKind::Ref(ref_op) => todo!(),
+            BasicOpKind::Aggregate(aggregate_op) => todo!(),
         }
     }
     pub fn start_analyze_path_constraints(

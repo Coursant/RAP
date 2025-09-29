@@ -155,7 +155,7 @@ where
         let ssa_def_id = self.ssa_def_id.expect("SSA definition ID is not set");
         let essa_def_id = self.essa_def_id.expect("ESSA definition ID is not set");
         let mut cg: ConstraintGraph<'tcx, T> =
-            ConstraintGraph::new(def_id, essa_def_id, ssa_def_id);
+            ConstraintGraph::new(self.tcx, def_id, essa_def_id, ssa_def_id);
         cg.build_graph(body_mut_ref);
         cg.build_nuutila(false);
         // cg.rap_print_vars();
@@ -308,7 +308,8 @@ where
             let mut body = self.tcx.optimized_mir(def_id).clone();
             let body_mut_ref = unsafe { &mut *(&mut body as *mut Body<'tcx>) };
 
-            let mut cg: ConstraintGraph<'tcx, T> = ConstraintGraph::new_without_ssa(def_id);
+            let mut cg: ConstraintGraph<'tcx, T> =
+                ConstraintGraph::new_without_ssa(self.tcx, def_id);
             let mut graph = MopGraph::new(self.tcx, def_id);
             graph.solve_scc();
             let paths: Vec<Vec<usize>> = graph.get_all_branch_sub_blocks_paths();
@@ -344,7 +345,8 @@ where
                     let mut body = self.tcx.optimized_mir(def_id).clone();
                     let body_mut_ref = unsafe { &mut *(&mut body as *mut Body<'tcx>) };
 
-                    let mut cg: ConstraintGraph<'tcx, T> = ConstraintGraph::new_without_ssa(def_id);
+                    let mut cg: ConstraintGraph<'tcx, T> =
+                        ConstraintGraph::new_without_ssa(self.tcx, def_id);
                     let mut graph = MopGraph::new(self.tcx, def_id);
                     graph.solve_scc();
                     // rap_info!("child_scc: {:?}\n", graph.child_scc);
