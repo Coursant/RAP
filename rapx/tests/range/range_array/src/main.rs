@@ -14,7 +14,7 @@ fn method_for_slice_loop() {
     let slice_index = 5;
     let slice = &mut a[1..slice_index];
     for i in 0..slice.len() {
-        slice[i] = i as i32;
+        slice[i] = i+1 ;
     }
     // println!("method_for_loop: {:?}", a);
 }

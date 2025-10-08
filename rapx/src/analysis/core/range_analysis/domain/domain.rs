@@ -8,7 +8,7 @@
 use crate::analysis::core::range_analysis::domain::ConstraintGraph::ConstraintGraph;
 use crate::analysis::core::range_analysis::{Range, RangeType};
 use crate::{rap_debug, rap_trace};
-use num_traits::{Bounded, CheckedAdd, CheckedSub, One, ToPrimitive, Zero};
+use num_traits::{ops, Bounded, CheckedAdd, CheckedSub, One, ToPrimitive, Zero};
 use rustc_abi::Size;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::def_id::DefId;
@@ -378,6 +378,19 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
             self.set_intersect(range);
         }
     }
+    pub fn set_sink(&mut self, new_sink: &'tcx Place<'tcx>) {
+        match self {
+            BasicOpKind::Unary(op) => op.sink = new_sink,
+            BasicOpKind::Binary(op) => op.sink = new_sink,
+            BasicOpKind::Essa(op) => op.sink = new_sink,
+            BasicOpKind::ControlDep(op) => op.sink = new_sink,
+            BasicOpKind::Phi(op) => op.sink = new_sink,
+            BasicOpKind::Use(op) => op.sink = new_sink,
+            BasicOpKind::Call(op) => op.sink = new_sink,
+            BasicOpKind::Ref(op) => op.sink = new_sink,
+            BasicOpKind::Aggregate(op) => op.sink = new_sink,
+        }
+    }
     pub fn set_intersect(&mut self, new_intersect: Range<T>) {
         match self {
             BasicOpKind::Unary(op) => op.intersect.set_range(new_intersect),
@@ -404,6 +417,26 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
             BasicOpKind::Aggregate(op) => &mut op.intersect,
         }
     }
+    pub fn get_sources(&self) -> Vec<&'tcx Place<'tcx>> {
+        match self {
+            BasicOpKind::Unary(op) => vec![op.source],
+            BasicOpKind::Binary(op) => {
+                let mut sources = vec![];
+                sources.push(op.source1.unwrap());
+                if let Some(source2) = op.source2 {
+                    sources.push(source2);
+                }
+                sources
+            }
+            BasicOpKind::Essa(op) => vec![op.source],
+            BasicOpKind::ControlDep(op) => vec![op.source],
+            BasicOpKind::Phi(op) => op.sources.clone(),
+            BasicOpKind::Use(op) => vec![op.source.unwrap()],
+            BasicOpKind::Call(op) => op.sources.clone(),
+            BasicOpKind::Ref(op) => vec![op.source],
+            BasicOpKind::Aggregate(_) => vec![],
+        }
+    }
 }
 #[derive(Debug, Clone)]
 pub struct CallOp<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
@@ -413,6 +446,7 @@ pub struct CallOp<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     pub args: Vec<Operand<'tcx>>,
     pub def_id: DefId,
     pub fun_path: String,
+    pub sources: Vec<&'tcx Place<'tcx>>,
 }
 
 impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
@@ -426,12 +460,14 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
         args: Vec<Operand<'tcx>>,
         def_id: DefId,
         fun_path: String,
+        sources: Vec<&'tcx Place<'tcx>>,
     ) -> Self {
         Self {
             intersect,
             sink,
             inst,
             args,
+            sources,
             def_id,
             fun_path,
         }
@@ -457,6 +493,24 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                         let range = var_node.get_range().clone();
                         rap_trace!(
                             "Iterator detected on place {:?}, returning its range: {}",
+                            place,
+                            range
+                        );
+                        return range;
+                    }
+                }
+                _ => {}
+            },
+            "std::iter::Iterator::next" => match self.args.first() {
+                Some(Operand::Copy(place)) | Some(Operand::Move(place)) => {
+                    rap_trace!(
+                        "Iterator next detected on place {:?}, returning its range",
+                        place
+                    );
+                    if let Some(var_node) = caller_vars.get(place) {
+                        let range = var_node.get_range().clone();
+                        rap_trace!(
+                            "Iterator next detected on place {:?}, returning its range: {}",
                             place,
                             range
                         );
@@ -1004,10 +1058,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> RefOp<'tcx, T> {
     }
 
     pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<T> {
-        let var_node = vars
-            .iter()
-            .find(|(place, _)| place.local == self.source.local)
-            .map(|(_, node)| node);
+        let var_node = vars.get(self.source);
         rap_trace!("RefOp eval: searching for {:?}\n", var_node);
         if let Some(var_node) = var_node {
             let range = var_node.get_range().clone();

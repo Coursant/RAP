@@ -18,6 +18,7 @@ pub struct Replacer<'tcx> {
     pub(crate) tcx: TyCtxt<'tcx>,
     pub(crate) ssatransformer: super::SSATransformer::SSATransformer<'tcx>,
     pub(crate) new_local_collection: HashSet<Local>,
+    pub(crate) new_locals_to_declare: HashMap<Local, Local>,
 }
 impl<'tcx> Replacer<'tcx> {
     pub fn insert_phi_statment(&mut self, body: &mut Body<'tcx>) {
@@ -426,6 +427,25 @@ impl<'tcx> Replacer<'tcx> {
         for bb in order {
             self.process_basic_block(bb, body);
         }
+
+        rap_debug!("new_locals_to_declare {:?}", self.new_locals_to_declare);
+
+        let mut locals_to_add: Vec<_> = self.new_locals_to_declare.iter().collect();
+        locals_to_add.sort_by_key(|(new_local, _)| new_local.index());
+        rap_debug!("locals_to_add {:?}", locals_to_add);
+        for (new_local, original_local) in locals_to_add {
+            // 从原始 local 找到它的声明
+            let original_decl = &body.local_decls[*original_local];
+
+            // 为新的 local 创建一个完全相同的声明（克隆类型、来源信息等）
+            let new_decl = original_decl.clone();
+
+            // body.local_decls 是一个 IndexVec，可以直接 push
+            // push 会返回新元素的索引，这个索引应该和你生成的 new_local.index() 一致
+            let pushed_index = body.local_decls.push(new_decl);
+            rap_debug!("Ok with {:?} {:?}", pushed_index, *new_local);
+            assert_eq!(pushed_index, *new_local);
+        }
     }
 
     fn process_basic_block(&mut self, bb: BasicBlock, body: &mut Body<'tcx>) {
@@ -673,6 +693,7 @@ impl<'tcx> Replacer<'tcx> {
         self.ssatransformer.local_index += 1;
         let new_place: Place<'_> = Place::from(new_local);
         *place = new_place.clone();
+        self.new_locals_to_declare.insert(new_local, old_local);
 
         let _old_local = old_local.clone();
         self.ssatransformer
@@ -713,6 +734,7 @@ impl<'tcx> Replacer<'tcx> {
         if old_local.as_u32() == 0 {
             return;
         }
+
         if self.ssatransformer.skipped.contains(&old_local.as_usize()) && not_phi {
             self.ssatransformer.skipped.remove(&old_local.as_usize());
             self.ssatransformer
@@ -727,6 +749,8 @@ impl<'tcx> Replacer<'tcx> {
         }
         let new_local = Local::from_usize(self.ssatransformer.local_index);
         let mut new_place: Place<'_> = Place::from(new_local);
+        self.new_locals_to_declare.insert(new_local, old_local);
+
         new_place.projection = place.projection;
         *place = new_place.clone();
 
