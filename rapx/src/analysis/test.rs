@@ -40,7 +40,7 @@ impl<'tcx> Test<'tcx> {
         let result = heap_analysis.get_all_items();
         rap_info!("{}", OHAResultMapWrapper(result));
 
-        let mut range_analysis = RangeAnalyzer::<i128>::new(self.tcx, false);
+        let mut range_analysis = RangeAnalyzer::<i64>::new(self.tcx, false);
         range_analysis.run();
         let path_constraint = range_analysis.get_all_path_constraints();
         rap_info!("{}", PathConstraintMapWrapper(path_constraint));

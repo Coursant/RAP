@@ -8,7 +8,11 @@
 use crate::analysis::core::range_analysis::domain::ConstraintGraph::ConstraintGraph;
 use crate::analysis::core::range_analysis::{Range, RangeType};
 use crate::{rap_debug, rap_trace};
-use num_traits::{ops, Bounded, CheckedAdd, CheckedSub, One, ToPrimitive, Zero};
+use interval::ops::Width;
+use num_traits::{
+    ops, Bounded as num_traitsBounded, CheckedAdd, CheckedSub, NumCast, One, ToPrimitive, Zero,
+};
+
 use rustc_abi::Size;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::def_id::DefId;
@@ -80,7 +84,6 @@ impl ConstConvert for i128 {
 pub trait IntervalArithmetic:
     PartialOrd
     + Clone
-    + Bounded
     + Zero
     + Copy
     + One
@@ -90,25 +93,15 @@ pub trait IntervalArithmetic:
     + Sub<Output = Self>
     + Mul<Output = Self>
     + fmt::Display
+    + num_traitsBounded
+    + num_traits::Num
+    + Width
+    + NumCast
 {
 }
+impl IntervalArithmetic for i64 {}
 
-impl<T> IntervalArithmetic for T where
-    T: PartialOrd
-        + Clone
-        + Bounded
-        + Zero
-        + One
-        + Copy
-        + CheckedAdd
-        + CheckedSub
-        + Add<Output = T>
-        + Sub<Output = T>
-        + Mul<Output = T>
-        + fmt::Display
-{
-}
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum IntervalType<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     Basic(BasicInterval<T>),
     Symb(SymbInterval<'tcx, T>), // Using 'static for simplicity, adjust lifetime as needed
@@ -146,7 +139,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> IntervalTypeTrait<T>
         }
     }
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct BasicInterval<T: IntervalArithmetic + ConstConvert + Debug> {
     range: Range<T>,
 }
@@ -157,7 +150,7 @@ impl<T: IntervalArithmetic + ConstConvert + Debug> BasicInterval<T> {
     }
     pub fn default() -> Self {
         Self {
-            range: Range::default(T::min_value()),
+            range: Range::default(),
         }
     }
 }
@@ -179,7 +172,7 @@ impl<T: IntervalArithmetic + ConstConvert + Debug> IntervalTypeTrait<T> for Basi
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 
 pub struct SymbInterval<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     range: Range<T>,
@@ -221,7 +214,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> SymbInterval<'tcx, T> {
             BinOp::Le => Range::new(lower, u, RangeType::Regular),
 
             BinOp::Lt => {
-                if u != T::max_value() {
+                if u != <T as num_traitsBounded>::max_value() {
                     let u_minus_1 = u.checked_sub(&T::one()).unwrap_or(u);
                     Range::new(lower, u_minus_1, RangeType::Regular)
                 } else {
@@ -232,7 +225,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> SymbInterval<'tcx, T> {
             BinOp::Ge => Range::new(l, upper, RangeType::Regular),
 
             BinOp::Gt => {
-                if l != T::min_value() {
+                if l != <T as num_traitsBounded>::min_value() {
                     let l_plus_1 = l.checked_add(&T::one()).unwrap_or(l);
                     Range::new(l_plus_1, upper, RangeType::Regular)
                 } else {
@@ -240,9 +233,17 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> SymbInterval<'tcx, T> {
                 }
             }
 
-            BinOp::Ne => Range::new(T::min_value(), T::max_value(), RangeType::Regular),
+            BinOp::Ne => Range::new(
+                <T as num_traitsBounded>::min_value(),
+                <T as num_traitsBounded>::max_value(),
+                RangeType::Regular,
+            ),
 
-            _ => Range::new(T::min_value(), T::max_value(), RangeType::Regular),
+            _ => Range::new(
+                <T as num_traitsBounded>::min_value(),
+                <T as num_traitsBounded>::max_value(),
+                RangeType::Regular,
+            ),
         }
     }
 }
@@ -474,7 +475,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
     }
 
     pub fn eval(&self, caller_vars: &VarNodes<'tcx, T>) -> Range<T> {
-        return Range::default(T::min_value());
+        return Range::default();
     }
     pub fn eval_call(
         &self,
@@ -520,7 +521,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                 _ => {}
             },
             "core::slice::<impl [T]>::len" => {
-                let mut result = Range::default(T::min_value());
+                let mut result = Range::default();
                 match self.args.last() {
                     Some(Operand::Copy(place)) | Some(Operand::Move(place)) => {
                         let range = caller_vars[place].get_range().clone();
@@ -538,7 +539,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                 return result;
             }
             "std::ops::IndexMut::index_mut" => {
-                let mut result = Range::default(T::min_value());
+                let mut result = Range::default();
 
                 match self.args.last() {
                     Some(Operand::Copy(place)) | Some(Operand::Move(place)) => {
@@ -557,7 +558,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
             }
             "core::panicking::panic" | "std::panicking::panic" => {
                 rap_trace!("Panic call detected, returning bottom range.");
-                return Range::new(T::max_value(), T::min_value(), RangeType::Empty);
+                return Range::default();
             }
             _ => {}
         }
@@ -650,7 +651,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                 // 5. Retrieve the return value.
                 //    The return value is stored in `_0` (RETURN_PLACE).
                 let return_place_local = 0 as usize; // `_0` is typically the first local.
-                let mut return_range = Range::default(T::min_value());
+                let mut return_range = Range::default();
 
                 // Find all variables that contribute to the return value.
                 // The `rerurn_places` set in the callee's graph tracks these.
@@ -673,7 +674,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                     "Recursive call or existing borrow for {:?}, returning top.",
                     self.def_id
                 );
-                return Range::new(T::min_value(), T::max_value(), RangeType::Regular);
+                return Range::default();
             }
         }
 
@@ -683,7 +684,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
             "Callee ConstraintGraph for {:?} not found, returning top.",
             self.def_id
         );
-        Range::new(T::min_value(), T::max_value(), RangeType::Regular)
+        Range::default()
     }
 }
 #[derive(Debug, Clone)]
@@ -723,7 +724,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> AggregateOp<'tcx, T> {
             return self.intersect.get_range().clone();
         }
 
-        let mut result: Range<T> = Range::default(T::min_value());
+        let mut result: Range<T> = Range::default();
         match self.unique_adt {
             0 => {
                 // If unique_adt is 0, we assume it's a regular array or slice.
@@ -735,8 +736,8 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> AggregateOp<'tcx, T> {
                     }
                     Some(AggregateOperand::Const(c)) => {
                         result = Range::new(
-                            T::from_const(c).unwrap_or(T::min_value()),
-                            T::from_const(c).unwrap_or(T::max_value()),
+                            T::from_const(c).unwrap_or(<T as num_traitsBounded>::min_value()),
+                            T::from_const(c).unwrap_or(<T as num_traitsBounded>::max_value()),
                             RangeType::Regular,
                         );
                     }
@@ -745,14 +746,14 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> AggregateOp<'tcx, T> {
             }
             1 => {
                 // If unique_adt is 1, we assume it's a Range with two operands.
-                let mut lower = T::min_value();
-                let mut upper = T::max_value();
+                let mut lower = <T as num_traitsBounded>::min_value();
+                let mut upper = <T as num_traitsBounded>::max_value();
                 match self.operands.first() {
                     Some(AggregateOperand::Place(place)) => {
                         lower = vars[*place].get_range().get_lower().clone();
                     }
                     Some(AggregateOperand::Const(c)) => {
-                        lower = T::from_const(c).unwrap_or(T::min_value());
+                        lower = T::from_const(c).unwrap_or(<T as num_traitsBounded>::min_value());
                     }
                     None => {}
                 }
@@ -761,7 +762,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> AggregateOp<'tcx, T> {
                         upper = vars[*place].get_range().get_upper().clone();
                     }
                     Some(AggregateOperand::Const(c)) => {
-                        upper = T::from_const(c).unwrap_or(T::max_value());
+                        upper = T::from_const(c).unwrap_or(<T as num_traitsBounded>::max_value());
                     }
                     None => {}
                 }
@@ -803,7 +804,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> UseOp<'tcx, T> {
     pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<T> {
         if let Some(source) = self.source {
             let range = vars[source].get_range().clone();
-            let mut result = Range::default(T::min_value());
+            let mut result = Range::default();
             if range.is_regular() {
                 result = range
             } else {
@@ -842,7 +843,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> UnaryOp<'tcx, T> {
     }
 
     pub fn eval(&self) -> Range<T> {
-        Range::default(T::min_value())
+        Range::default()
     }
 }
 #[derive(Debug, Clone)]
@@ -949,7 +950,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BinaryOp<'tcx, T> {
 
     pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<T> {
         let op1 = vars[self.source1.unwrap()].get_range().clone();
-        let mut op2 = Range::default(T::min_value());
+        let mut op2 = Range::default();
         if let Some(const_value) = &self.const_value {
             // If const_value is provided, use it as the second operand
             let value = Self::convert_const(const_value).unwrap();
@@ -957,7 +958,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BinaryOp<'tcx, T> {
         } else {
             op2 = vars[self.source2.unwrap()].get_range().clone();
         }
-        let mut result = Range::default(T::min_value());
+        let mut result = Range::default();
         match &self.inst.kind {
             StatementKind::Assign(box (place, rvalue)) => match rvalue {
                 Rvalue::BinaryOp(binop, _) => match binop {
@@ -1106,11 +1107,11 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> ControlDep<'tcx, T> {
     }
 
     pub fn eval(&self) -> Range<T> {
-        Range::default(T::min_value())
+        Range::default()
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone)]
 pub struct VarNode<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     // The program variable which is represented.
     pub v: &'tcx Place<'tcx>,
@@ -1123,7 +1124,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> VarNode<'tcx, T> {
     pub fn new(v: &'tcx Place<'tcx>) -> Self {
         Self {
             v,
-            interval: Range::default(T::min_value()),
+            interval: Range::default(),
             abstract_state: '?',
         }
     }

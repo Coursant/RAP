@@ -10,9 +10,11 @@ use crate::{
     },
     utils::source::get_fn_name_byid,
 };
-use intervals::Closed;
+// use intervals::Closed;
+use gcollections::ops::Bounded;
+use interval::Interval;
+use interval::IntervalSet;
 use once_cell::sync::Lazy;
-
 use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{BinOp, Place};
@@ -30,9 +32,9 @@ pub type RAVecResultMap<'tcx, T> = FxHashMap<DefId, Vec<HashMap<Place<'tcx>, Ran
 pub type PathConstraint<'tcx> = HashMap<Vec<usize>, Vec<(Place<'tcx>, Place<'tcx>, BinOp)>>;
 pub type PathConstraintMap<'tcx> =
     FxHashMap<DefId, HashMap<Vec<usize>, Vec<(Place<'tcx>, Place<'tcx>, BinOp)>>>;
-pub struct RAResultWrapper<'tcx, T: Clone + PartialOrd>(pub RAResult<'tcx, T>);
-pub struct RAResultMapWrapper<'tcx, T: Clone + PartialOrd>(pub RAResultMap<'tcx, T>);
-pub struct RAVecResultMapWrapper<'tcx, T: Clone + PartialOrd>(pub RAVecResultMap<'tcx, T>);
+pub struct RAResultWrapper<'tcx, T: IntervalArithmetic>(pub RAResult<'tcx, T>);
+pub struct RAResultMapWrapper<'tcx, T: IntervalArithmetic>(pub RAResultMap<'tcx, T>);
+pub struct RAVecResultMapWrapper<'tcx, T: IntervalArithmetic>(pub RAVecResultMap<'tcx, T>);
 pub struct PathConstraintWrapper<'tcx>(pub PathConstraint<'tcx>);
 pub struct PathConstraintMapWrapper<'tcx>(pub PathConstraintMap<'tcx>);
 
@@ -106,7 +108,7 @@ impl<'tcx, T> Display for RAVecResultMapWrapper<'tcx, T>
 where
     DefId: Debug,
     Place<'tcx>: Debug,
-    T: IntervalArithmetic + Clone + PartialOrd + Display,
+    T: IntervalArithmetic + Display,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "=== Print range analysis resuts ===")?;
@@ -183,13 +185,13 @@ impl fmt::Display for RangeType {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone)]
 pub struct Range<T>
 where
-    T: PartialOrd + Clone,
+    T: IntervalArithmetic,
 {
     pub rtype: RangeType,
-    pub range: Closed<T>,
+    pub range: Interval<T>,
 }
 
 static STR_MIN: Lazy<String> = Lazy::new(|| "Min".to_string());
@@ -200,29 +202,28 @@ where
     T: IntervalArithmetic,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let lower = if self.range.left.0 == T::min_value() {
+        // delta = 10
+        let delta = num_traits::cast::cast(10).unwrap();
+
+        let lower_bound = <T as num_traits::Bounded>::min_value();
+        let upper_bound = <T as num_traits::Bounded>::max_value();
+
+        let lower = if self.range.lower() <= lower_bound + delta {
             &*STR_MIN
-        } else if self.range.left.0 == T::max_value() {
+        } else if self.range.lower() >= upper_bound - delta {
             &*STR_MAX
         } else {
-            return write!(
-                f,
-                "{} [{}, {}]",
-                self.rtype, self.range.left.0, self.range.right.0
-            );
+            &format!("{}", self.range.lower())
         };
 
-        let upper = if self.range.right.0 == T::min_value() {
+        let upper = if self.range.upper() <= lower_bound + delta {
             &*STR_MIN
-        } else if self.range.right.0 == T::max_value() {
+        } else if self.range.upper() >= upper_bound - delta {
             &*STR_MAX
         } else {
-            return write!(
-                f,
-                "{} [{}, {}]",
-                self.rtype, self.range.left.0, self.range.right.0
-            );
+            &format!("{}", self.range.upper())
         };
+
         write!(f, "{} [{}, {}]", self.rtype, lower, upper)
     }
 }

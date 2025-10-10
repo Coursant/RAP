@@ -2,12 +2,13 @@
 #![allow(unused_variables)]
 #![allow(dead_code)]
 #![allow(unused_assignments)]
-use std::{default, fmt};
-
-use bounds::Bound;
-use intervals::*;
-use num_traits::{Bounded, Num, Zero};
+use gcollections::ops::{Bounded, Intersection};
+use interval::ops::{Range as internRange, Whole};
+use interval::Interval;
+use interval::IntervalSet;
+use num_traits::{Bounded as num_traitsBounded, Num, Zero};
 use rustc_middle::mir::{BinOp, UnOp};
+use std::{default, fmt};
 // use std::ops::Range;
 use std::ops::{Add, Mul, Sub};
 
@@ -19,9 +20,9 @@ use crate::{
 use super::domain::*;
 
 // fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//     let lower: &Lazy<String> = if self.range.left.0 == T::min_value() {
+//     let lower: &Lazy<String> = if self.range.left.0 == <T as num_traitsBounded>::min_value() {
 //         &STR_MIN
-//     } else if self.range.left.0 == T::max_value() {
+//     } else if self.range.left.0 == <T as num_traitsBounded>::max_value() {
 //         &STR_MAX
 //     } else {
 //         static DUMMY: Lazy<String> = Lazy::new(|| String::new());
@@ -33,9 +34,9 @@ use super::domain::*;
 //             "{} [{}, {}]",
 //             self.rtype,
 //             *local,
-//             if self.range.right.0 == T::min_value() {
+//             if self.range.right.0 == <T as num_traitsBounded>::min_value() {
 //                 &*STR_MIN
-//             } else if self.range.right.0 == T::max_value() {
+//             } else if self.range.right.0 == <T as num_traitsBounded>::max_value() {
 //                 &*STR_MAX
 //             } else {
 //                 return write!(f, "{} [{}, {}]", self.rtype, tmp_clone, self.range.right.0);
@@ -43,9 +44,9 @@ use super::domain::*;
 //         );
 //     };
 
-//     let upper: &Lazy<String> = if self.range.right.0 == T::min_value() {
+//     let upper: &Lazy<String> = if self.range.right.0 == <T as num_traitsBounded>::min_value() {
 //         &STR_MIN
-//     } else if self.range.right.0 == T::max_value() {
+//     } else if self.range.right.0 == <T as num_traitsBounded>::max_value() {
 //         &STR_MAX
 //     } else {
 //         let tmp = format!("{}", self.range.right.0);
@@ -64,43 +65,40 @@ where
     pub fn new(lb: T, ub: T, rtype: RangeType) -> Self {
         Self {
             rtype,
-            range: Interval::new_unchecked(bounds::Closed(lb), bounds::Closed(ub)),
+            range: Interval::new(lb, ub),
         }
     }
-    pub fn default(default: T) -> Self {
+    pub fn default() -> Self {
         Self {
             rtype: RangeType::Unknown,
 
-            range: Interval::new_unchecked(
-                bounds::Closed(T::min_value()),
-                bounds::Closed(T::max_value()),
-            ),
+            range: Interval::whole(),
         }
     }
     // Getter for lower bound
-    pub fn init(r: Closed<T>) -> Self {
+    pub fn init(r: Interval<T>) -> Self {
         Self {
             rtype: RangeType::Regular,
             range: r,
         }
     }
     pub fn get_lower(&self) -> T {
-        self.range.left.0.clone()
+        self.range.lower()
     }
 
     // Getter for upper bound
     pub fn get_upper(&self) -> T {
-        self.range.right.0.clone()
+        self.range.upper()
     }
 
     // Setter for lower bound
     pub fn set_lower(&mut self, newl: T) {
-        self.range.left.0 = newl;
+        self.range.lower() == newl;
     }
 
     // Setter for upper bound
     pub fn set_upper(&mut self, newu: T) {
-        self.range.right.0 = newu;
+        self.range.upper() == newu;
     }
 
     // Check if the range type is unknown
@@ -134,21 +132,20 @@ where
     }
     pub fn set_default(&mut self) {
         self.rtype = RangeType::Regular;
-        self.range.left.0 = T::min_value();
-        self.range.right.0 = T::max_value();
+        self.range = Interval::whole();
     }
     pub fn add(&self, other: &Range<T>) -> Range<T> {
         let a = self
             .get_lower()
             .clone()
             .checked_add(&other.get_lower().clone())
-            .unwrap_or(T::max_value());
+            .unwrap_or(<T as num_traitsBounded>::max_value());
 
         let b = self
             .get_upper()
             .clone()
             .checked_add(&other.get_upper().clone())
-            .unwrap_or(T::max_value());
+            .unwrap_or(<T as num_traitsBounded>::max_value());
 
         Range::new(a, b, RangeType::Regular)
     }
@@ -158,13 +155,13 @@ where
             .get_lower()
             .clone()
             .checked_sub(&other.get_upper().clone())
-            .unwrap_or(T::min_value());
+            .unwrap_or(<T as num_traitsBounded>::min_value());
 
         let b = self
             .get_upper()
             .clone()
             .checked_sub(&other.get_lower().clone())
-            .unwrap_or(T::max_value());
+            .unwrap_or(<T as num_traitsBounded>::max_value());
 
         Range::new(a, b, RangeType::Regular)
     }
@@ -203,11 +200,10 @@ where
                 RangeType::Regular,
             );
         } else {
-            let result = self.range.clone().intersect(other.range.clone());
-            let result = self.range.clone().intersect(other.range.clone());
-            let mut range = Range::default(T::min_value());
+            let result = self.range.clone().intersection(&other.range.clone());
+            let mut range = Range::default();
 
-            if let Some(r) = result {
+            if let r = result {
                 range = Range::init(r);
                 range
             } else {
@@ -223,7 +219,7 @@ where
             // if left <= right {
             //     Range::new(left.clone(), right.clone(), RangeType::Regular)
             // } else {
-            //     let empty = T::min_value();
+            //     let empty = <T as num_traitsBounded>::min_value();
             //     Range::new(empty.clone(), empty, RangeType::Empty)
             // }
         }
@@ -253,7 +249,7 @@ where
     }
     // Check if the range is the maximum range
     // pub fn is_max_range(&self) -> bool {
-    //     self.range.lower() == T::min_value() && self.range.upper() == T::max_value()
+    //     self.range.lower() == <T as num_traitsBounded>::min_value() && self.range.upper() == <T as num_traitsBounded>::max_value()
     // }
 
     // // Print the range
@@ -296,12 +292,12 @@ impl Meet {
         //     .iter()
         //     .find(|&&c| c <= new_lower)
         //     .cloned()
-        //     .unwrap_or(T::min_value());
+        //     .unwrap_or(<T as num_traitsBounded>::min_value());
         // let nuconstant = constant_vector
         //     .iter()
         //     .find(|&&c| c >= new_upper)
         //     .cloned()
-        //     .unwrap_or(T::max_value());
+        //     .unwrap_or(<T as num_traitsBounded>::max_value());
         let nlconstant = new_lower.clone();
         let nuconstant = new_upper.clone();
         let updated = if old_interval.is_unknown() {
@@ -330,7 +326,7 @@ impl Meet {
             new_sink_interval
         );
 
-        old_interval != new_sink_interval
+        old_interval.range != new_sink_interval.range
     }
     pub fn narrow<'tcx, T: IntervalArithmetic + ConstConvert + fmt::Debug>(
         op: &mut BasicOpKind<'tcx, T>,
@@ -345,8 +341,8 @@ impl Meet {
         let n_upper = new_range.get_upper().clone();
 
         let mut has_changed = false;
-        let min = T::min_value();
-        let max = T::max_value();
+        let min = <T as num_traitsBounded>::min_value();
+        let max = <T as num_traitsBounded>::max_value();
 
         let mut result_lower = o_lower.clone();
         let mut result_upper = o_upper.clone();
@@ -356,7 +352,7 @@ impl Meet {
             has_changed = true;
         } else {
             // let smin = o_lower.clone().min(n_lower.clone());
-            let smin = T::min_value();
+            let smin = <T as num_traitsBounded>::min_value();
             if o_lower != smin {
                 result_lower = smin;
                 has_changed = true;
@@ -368,7 +364,7 @@ impl Meet {
             has_changed = true;
         } else {
             // let smax = o_upper.clone().max(n_upper.clone());
-            let smax = T::max_value();
+            let smax = <T as num_traitsBounded>::max_value();
             if o_upper != smax {
                 result_upper = smax;
                 has_changed = true;

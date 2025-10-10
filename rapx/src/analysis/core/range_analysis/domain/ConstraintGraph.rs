@@ -6,13 +6,16 @@
 #![allow(non_snake_case)]
 
 use super::domain::*;
-use crate::analysis::core::range_analysis::{Range, RangeType};
-
 use crate::analysis::core::range_analysis::domain::SymbolicExpr::*;
+use crate::analysis::core::range_analysis::{Range, RangeType};
 use crate::rap_debug;
 use crate::rap_info;
 use crate::rap_trace;
-use num_traits::Bounded;
+use gcollections::ops::{Bounded, Intersection};
+use interval::ops::{Range as internRange, Whole};
+use interval::Interval;
+use interval::IntervalSet;
+use num_traits::{Bounded as num_traitsBounded, Num, Zero};
 use once_cell::sync::{Lazy, OnceCell};
 // use rand::Rng;
 use rustc_abi::FieldIdx;
@@ -657,7 +660,7 @@ where
                         // self.switchbbs.insert(block, (place, variable));
                     }
                     (None, None) => {
-                        let CR = Range::new(T::min_value(), T::max_value(), RangeType::Unknown);
+                        let CR = Range::default();
 
                         let p1 = match op1 {
                             Operand::Copy(p) | Operand::Move(p) => p,
@@ -791,41 +794,81 @@ where
         match cmp_op {
             BinOp::Lt => {
                 if is_true_branch ^ const_in_left {
-                    Range::new(U::min_value(), constant.sub(U::one()), RangeType::Unknown)
+                    Range::new(
+                        <U as num_traitsBounded>::min_value(),
+                        constant.sub(U::one()),
+                        RangeType::Unknown,
+                    )
                 } else {
-                    Range::new(constant, U::max_value(), RangeType::Unknown)
+                    Range::new(
+                        constant,
+                        <U as num_traitsBounded>::max_value(),
+                        RangeType::Unknown,
+                    )
                 }
             }
 
             BinOp::Le => {
                 if is_true_branch ^ const_in_left {
-                    Range::new(U::min_value(), constant, RangeType::Unknown)
+                    Range::new(
+                        <U as num_traitsBounded>::min_value(),
+                        constant,
+                        RangeType::Unknown,
+                    )
                 } else {
-                    Range::new(constant.add(U::one()), U::max_value(), RangeType::Unknown)
+                    Range::new(
+                        constant.add(U::one()),
+                        <U as num_traitsBounded>::max_value(),
+                        RangeType::Unknown,
+                    )
                 }
             }
 
             BinOp::Gt => {
                 if is_true_branch ^ const_in_left {
-                    Range::new(U::min_value(), constant, RangeType::Unknown)
+                    Range::new(
+                        <U as num_traitsBounded>::min_value(),
+                        constant,
+                        RangeType::Unknown,
+                    )
                 } else {
-                    Range::new(constant.add(U::one()), U::max_value(), RangeType::Unknown)
+                    Range::new(
+                        constant.add(U::one()),
+                        <U as num_traitsBounded>::max_value(),
+                        RangeType::Unknown,
+                    )
                 }
             }
 
             BinOp::Ge => {
                 if is_true_branch ^ const_in_left {
-                    Range::new(U::min_value(), constant, RangeType::Unknown)
+                    Range::new(
+                        <U as num_traitsBounded>::min_value(),
+                        constant,
+                        RangeType::Unknown,
+                    )
                 } else {
-                    Range::new(constant, U::max_value().sub(U::one()), RangeType::Unknown)
+                    Range::new(
+                        constant,
+                        <U as num_traitsBounded>::max_value().sub(U::one()),
+                        RangeType::Unknown,
+                    )
                 }
             }
 
             BinOp::Eq => {
                 if is_true_branch ^ const_in_left {
-                    Range::new(U::min_value(), constant, RangeType::Unknown)
+                    Range::new(
+                        <U as num_traitsBounded>::min_value(),
+                        constant,
+                        RangeType::Unknown,
+                    )
                 } else {
-                    Range::new(constant, U::max_value(), RangeType::Unknown)
+                    Range::new(
+                        constant,
+                        <U as num_traitsBounded>::max_value(),
+                        RangeType::Unknown,
+                    )
                 }
             }
 
@@ -1088,7 +1131,7 @@ where
             }
         }
         {
-            let bi = BasicInterval::new(Range::default(T::min_value()));
+            let bi = BasicInterval::new(Range::default());
 
             let call_op = CallOp::new(
                 IntervalType::Basic(bi),
@@ -1124,7 +1167,7 @@ where
         let sink_node = self.add_varnode(sink);
         rap_trace!("addsink_in_ssa_op{:?}\n", sink_node);
 
-        let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
+        let BI: BasicInterval<T> = BasicInterval::new(Range::default());
         let mut phiop = PhiOp::new(IntervalType::Basic(BI), sink, inst, 0);
         let bop_index = self.oprs.len();
         for i in 0..operands.len() {
@@ -1158,7 +1201,7 @@ where
     ) {
         rap_trace!("use_op{:?}\n", inst);
 
-        let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
+        let BI: BasicInterval<T> = BasicInterval::new(Range::default());
         let mut source: Option<&'tcx Place<'tcx>> = None;
 
         match op {
@@ -1213,7 +1256,7 @@ where
                     rap_trace!("set_const {:?} value: {:?}\n", sink_node, value);
                     // rap_trace!("sinknoderange: {:?}\n", sink_node.get_range());
                 } else {
-                    sink_node.set_range(Range::default(T::min_value()));
+                    sink_node.set_range(Range::default());
                 };
             }
         }
@@ -1230,7 +1273,7 @@ where
         let sink_node = self.add_varnode(sink);
         // rap_trace!("addsink_in_essa_op {:?}\n", sink_node);
 
-        // let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
+        // let BI: BasicInterval<T> = BasicInterval::new(Range::default());
         let loc_1: usize = 0;
         let loc_2: usize = 1;
         let source1 = match &operands[FieldIdx::from_usize(loc_1)] {
@@ -1326,7 +1369,7 @@ where
     ) {
         rap_trace!("aggregate_op {:?}\n", inst);
 
-        let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
+        let BI: BasicInterval<T> = BasicInterval::new(Range::default());
         let mut agg_operands: Vec<AggregateOperand<'tcx>> = Vec::with_capacity(operands.len());
 
         for operand in operands {
@@ -1355,7 +1398,7 @@ where
                         ));
                         rap_trace!("set_const {:?} value: {:?}\n", sink_node, value);
                     } else {
-                        sink_node.set_range(Range::default(T::min_value()));
+                        sink_node.set_range(Range::default());
                     }
                 }
             }
@@ -1399,7 +1442,7 @@ where
         let sink_node = self.add_varnode(sink);
         rap_trace!("addsink_in_unary_op{:?}\n", sink_node);
 
-        let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
+        let BI: BasicInterval<T> = BasicInterval::new(Range::default());
         let loc_1: usize = 0;
 
         let source = match operand {
@@ -1435,7 +1478,7 @@ where
         let sink_node = self.add_varnode(sink);
         rap_trace!("addsink_in_binary_op{:?}\n", sink_node);
         let bop_index = self.oprs.len();
-        let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
+        let BI: BasicInterval<T> = BasicInterval::new(Range::default());
 
         let source1_place = match op1 {
             Operand::Copy(place) | Operand::Move(place) => {
@@ -1508,7 +1551,7 @@ where
     ) {
         rap_trace!("ref_op {:?}\n", inst);
 
-        let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
+        let BI: BasicInterval<T> = BasicInterval::new(Range::default());
 
         let source_node = self.add_varnode(place);
 
@@ -1581,21 +1624,33 @@ where
         //     .iter()
         //     .find(|&&c| c <= new_lower)
         //     .cloned()
-        //     .unwrap_or(T::min_value());
+        //     .unwrap_or(<T as num_traitsBounded>::min_value());
         // let nuconstant = constant_vector
         //     .iter()
         //     .find(|&&c| c >= new_upper)
         //     .cloned()
-        //     .unwrap_or(T::max_value());
+        //     .unwrap_or(<T as num_traitsBounded>::max_value());
 
         let updated = if old_interval.is_unknown() {
             estimated_interval.clone()
         } else if new_lower < old_lower && new_upper > old_upper {
-            Range::new(T::min_value(), T::max_value(), RangeType::Regular)
+            Range::new(
+                <T as num_traitsBounded>::min_value(),
+                <T as num_traitsBounded>::max_value(),
+                RangeType::Regular,
+            )
         } else if new_lower < old_lower {
-            Range::new(T::min_value(), old_upper.clone(), RangeType::Regular)
+            Range::new(
+                <T as num_traitsBounded>::min_value(),
+                old_upper.clone(),
+                RangeType::Regular,
+            )
         } else if new_upper > old_upper {
-            Range::new(old_lower.clone(), T::max_value(), RangeType::Regular)
+            Range::new(
+                old_lower.clone(),
+                <T as num_traitsBounded>::max_value(),
+                RangeType::Regular,
+            )
         } else {
             old_interval.clone()
         };
@@ -1611,7 +1666,7 @@ where
             updated
         );
 
-        old_interval != updated
+        old_interval.range != updated.range
     }
     pub fn narrow(
         &mut self,
@@ -1642,7 +1697,9 @@ where
         // let mut hasChanged = false;
         let mut final_lower = old_lower.clone();
         let mut final_upper = old_upper.clone();
-        if old_lower.clone() == T::min_value() && new_lower.clone() > T::min_value() {
+        if old_lower.clone() == <T as num_traitsBounded>::min_value()
+            && new_lower.clone() > <T as num_traitsBounded>::min_value()
+        {
             final_lower = new_lower.clone();
             // tightened = Range::new(new_lower.clone(), old_upper.clone(), RangeType::Regular);
             // hasChanged = true;
@@ -1652,7 +1709,9 @@ where
             // tightened = Range::new(new_lower.clone(), old_upper.clone(), RangeType::Regular);
             // hasChanged = true;
         };
-        if old_upper.clone() == T::max_value() && new_upper.clone() < T::max_value() {
+        if old_upper.clone() == <T as num_traitsBounded>::max_value()
+            && new_upper.clone() < <T as num_traitsBounded>::max_value()
+        {
             final_upper = new_upper.clone();
             // tightened = Range::new(old_lower.clone(), new_upper.clone(), RangeType::Regular);
             // hasChanged = true;
@@ -1676,7 +1735,7 @@ where
             old_interval,
             tightened
         );
-        let hasChanged = old_interval != tightened;
+        let hasChanged = old_interval.range != tightened.range;
 
         hasChanged
     }
@@ -1919,7 +1978,7 @@ where
         rap_trace!("====Merging return places====\n");
         for &place in self.rerurn_places.iter() {
             rap_debug!("merging return place {:?}\n", place);
-            let mut merged_range = Range::default(T::min_value());
+            let mut merged_range = Range::default();
             if let Some(opset) = self.vars.get(place) {
                 merged_range = merged_range.unionwith(opset.get_range());
             }

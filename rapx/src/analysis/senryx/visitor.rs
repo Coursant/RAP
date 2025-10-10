@@ -649,7 +649,7 @@ impl<'tcx> BodyVisitor<'tcx> {
     }
 
     pub fn get_all_paths(&mut self) -> HashMap<Vec<usize>, Vec<(Place<'tcx>, Place<'tcx>, BinOp)>> {
-        let mut range_analyzer = RangeAnalyzer::<i128>::new(self.tcx, false);
+        let mut range_analyzer = RangeAnalyzer::<i64>::new(self.tcx, false);
         let path_constraints_option =
             range_analyzer.start_path_constraints_analysis_for_defid(self.def_id); // if def_id does not exist, this will break down
         let mut path_constraints: HashMap<Vec<usize>, Vec<(_, _, _)>> =
