@@ -4,9 +4,8 @@
 #![allow(unused_assignments)]
 use std::{default, fmt};
 
-use bounds::Bound;
-use intervals::*;
 use num_traits::{Bounded, Num, Zero};
+use rust_intervals::Interval;
 use rustc_middle::mir::{BinOp, UnOp};
 // use std::ops::Range;
 use std::ops::{Add, Mul, Sub};
@@ -64,44 +63,39 @@ where
     pub fn new(lb: T, ub: T, rtype: RangeType) -> Self {
         Self {
             rtype,
-            range: Interval::new_unchecked(bounds::Closed(lb), bounds::Closed(ub)),
+            range: Interval::new_closed_closed(lb, ub),
         }
     }
     pub fn default(default: T) -> Self {
         Self {
             rtype: RangeType::Unknown,
 
-            range: Interval::new_unchecked(
-                bounds::Closed(T::min_value()),
-                bounds::Closed(T::max_value()),
-            ),
+            range: Interval::new_closed_closed(default, default),
         }
     }
     // Getter for lower bound
-    pub fn init(r: Closed<T>) -> Self {
+    pub fn init(r: Interval<T>) -> Self {
         Self {
             rtype: RangeType::Regular,
             range: r,
         }
     }
     pub fn get_lower(&self) -> T {
-        self.range.left.0.clone()
+        self.range.lower().unwrap().clone()
     }
 
     // Getter for upper bound
     pub fn get_upper(&self) -> T {
-        self.range.right.0.clone()
+        self.range.upper().unwrap().clone()
     }
 
-    // Setter for lower bound
-    pub fn set_lower(&mut self, newl: T) {
-        self.range.left.0 = newl;
-    }
+    // // Setter for lower bound
+    // pub fn set_lower(&mut self, newl: T) {
+    // }
 
-    // Setter for upper bound
-    pub fn set_upper(&mut self, newu: T) {
-        self.range.right.0 = newu;
-    }
+    // // Setter for upper bound
+    // pub fn set_upper(&mut self, newu: T) {
+    // }
 
     // Check if the range type is unknown
     pub fn is_unknown(&self) -> bool {
@@ -134,8 +128,7 @@ where
     }
     pub fn set_default(&mut self) {
         self.rtype = RangeType::Regular;
-        self.range.left.0 = T::min_value();
-        self.range.right.0 = T::max_value();
+        self.range = Interval::new_closed_closed(T::min_value(), T::max_value());
     }
     pub fn add(&self, other: &Range<T>) -> Range<T> {
         let a = self
@@ -203,11 +196,10 @@ where
                 RangeType::Regular,
             );
         } else {
-            let result = self.range.clone().intersect(other.range.clone());
-            let result = self.range.clone().intersect(other.range.clone());
+            let result = self.range.clone().intersection(&other.range.clone());
             let mut range = Range::default(T::min_value());
 
-            if let Some(r) = result {
+            if let r = result {
                 range = Range::init(r);
                 range
             } else {
@@ -273,7 +265,7 @@ where
 pub struct Meet;
 
 impl Meet {
-    pub fn widen<'tcx, T: IntervalArithmetic + ConstConvert + fmt::Debug>(
+    pub fn widen<'tcx, T: IntervalArithmetic + ConstConvert>(
         op: &mut BasicOpKind<'tcx, T>,
         constant_vector: &[T],
         vars: &mut VarNodes<'tcx, T>,
@@ -326,13 +318,13 @@ impl Meet {
         rap_trace!(
             "WIDEN::{:?}: {:?} -> {:?}",
             sink,
-            old_interval,
+            old_interval.range,
             new_sink_interval
         );
 
-        old_interval != new_sink_interval
+        old_interval.range != new_sink_interval.range
     }
-    pub fn narrow<'tcx, T: IntervalArithmetic + ConstConvert + fmt::Debug>(
+    pub fn narrow<'tcx, T: IntervalArithmetic + ConstConvert>(
         op: &mut BasicOpKind<'tcx, T>,
         vars: &mut VarNodes<'tcx, T>,
     ) -> bool {

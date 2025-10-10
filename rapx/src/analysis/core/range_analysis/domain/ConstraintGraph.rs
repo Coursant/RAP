@@ -308,17 +308,17 @@ where
     }
     pub fn rap_print_final_vars(&self) {
         for (&key, value) in &self.final_vars {
-            rap_debug!("Var: {:?}, {} ", key, value.get_range());
+            rap_debug!("Var: {:?}, {:?} ", key, value.get_range());
         }
     }
     pub fn rap_print_vars(&self) {
         for (&key, value) in &self.vars {
-            rap_trace!("Var: {:?}. {} ", key, value.get_range());
+            rap_trace!("Var: {:?}. {:?} ", key, value.get_range());
         }
     }
     pub fn print_vars(&self) {
         for (&key, value) in &self.vars {
-            rap_trace!("Var: {:?}. {} ", key, value.get_range());
+            rap_trace!("Var: {:?}. {:?} ", key, value.get_range());
         }
     }
     pub fn print_conponent_vars(&self) {
@@ -328,7 +328,7 @@ where
                 rap_trace!("component: {:?} ", key);
                 for v in value {
                     if let Some(var_node) = self.vars.get(v) {
-                        rap_trace!("Var: {:?}. {} ", v, var_node.get_range());
+                        rap_trace!("Var: {:?}. {:?} ", v, var_node.get_range());
                     } else {
                         rap_trace!("Var: {:?} not found", v);
                     }
@@ -1602,7 +1602,7 @@ where
 
         self.vars.get_mut(sink).unwrap().set_range(updated.clone());
         rap_trace!(
-            "WIDEN in {} set {:?}: E {} U {} {} -> {}",
+            "WIDEN in {} set {:?}: E {:?} U {:?} {:?} -> {:?}",
             op,
             sink,
             estimated_interval,
@@ -1668,7 +1668,7 @@ where
             .unwrap()
             .set_range(tightened.clone());
         rap_trace!(
-            "NARROW in {} set {:?}: E {} U {} {} -> {}",
+            "NARROW in {} set {:?}: E {:?} U {:?} {:?} -> {:?}",
             op,
             sink,
             estimated_interval,
@@ -1792,7 +1792,7 @@ where
                     };
                     let sink_node = self.vars.get_mut(sink).unwrap();
                     rap_trace!(
-                        "prop component {:?} set {} to {:?} through {:?}\n",
+                        "prop component {:?} set {:?} to {:?} through {:?}\n",
                         component,
                         new_range,
                         sink,
@@ -1924,7 +1924,7 @@ where
                 merged_range = merged_range.unionwith(opset.get_range());
             }
             if let Some(return_node) = self.vars.get_mut(&Place::return_place()) {
-                rap_debug!("Assigning final merged range {} to _0", merged_range);
+                rap_debug!("Assigning final merged range {:?} to _0", merged_range);
                 return_node.set_range(merged_range);
             } else {
                 // This case is unlikely for functions that return a value, as `_0`

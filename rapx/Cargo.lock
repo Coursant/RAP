@@ -645,6 +645,7 @@ dependencies = [
  "petgraph",
  "rand",
  "regex",
+ "rust_intervals",
  "rustc-demangle",
  "safety-parser",
  "serde",
@@ -685,6 +686,12 @@ name = "regex-syntax"
 version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
+
+[[package]]
+name = "rust_intervals"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "994f92311abb71a820e646e4d9d54b9d0dd7f62f7a211298d3316e891bbaac41"
 
 [[package]]
 name = "rustc-demangle"

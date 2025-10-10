@@ -10,9 +10,9 @@ use crate::{
     },
     utils::source::get_fn_name_byid,
 };
-use intervals::Closed;
 use once_cell::sync::Lazy;
-
+// use intervals::Closed;
+use rust_intervals::Interval;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{BinOp, Place};
@@ -22,7 +22,6 @@ use std::{
     collections::HashMap,
     fmt::{self, Debug, Display},
 };
-
 pub type RAResult<'tcx, T> = HashMap<Place<'tcx>, Range<T>>;
 pub type RAResultMap<'tcx, T> = FxHashMap<DefId, HashMap<Place<'tcx>, Range<T>>>;
 pub type RAVecResultMap<'tcx, T> = FxHashMap<DefId, Vec<HashMap<Place<'tcx>, Range<T>>>>;
@@ -30,9 +29,9 @@ pub type RAVecResultMap<'tcx, T> = FxHashMap<DefId, Vec<HashMap<Place<'tcx>, Ran
 pub type PathConstraint<'tcx> = HashMap<Vec<usize>, Vec<(Place<'tcx>, Place<'tcx>, BinOp)>>;
 pub type PathConstraintMap<'tcx> =
     FxHashMap<DefId, HashMap<Vec<usize>, Vec<(Place<'tcx>, Place<'tcx>, BinOp)>>>;
-pub struct RAResultWrapper<'tcx, T: Clone + PartialOrd>(pub RAResult<'tcx, T>);
-pub struct RAResultMapWrapper<'tcx, T: Clone + PartialOrd>(pub RAResultMap<'tcx, T>);
-pub struct RAVecResultMapWrapper<'tcx, T: Clone + PartialOrd>(pub RAVecResultMap<'tcx, T>);
+pub struct RAResultWrapper<'tcx, T: IntervalArithmetic>(pub RAResult<'tcx, T>);
+pub struct RAResultMapWrapper<'tcx, T: IntervalArithmetic>(pub RAResultMap<'tcx, T>);
+pub struct RAVecResultMapWrapper<'tcx, T: IntervalArithmetic>(pub RAVecResultMap<'tcx, T>);
 pub struct PathConstraintWrapper<'tcx>(pub PathConstraint<'tcx>);
 pub struct PathConstraintMapWrapper<'tcx>(pub PathConstraintMap<'tcx>);
 
@@ -182,47 +181,38 @@ impl fmt::Display for RangeType {
         write!(f, "{}", s)
     }
 }
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
 
-#[derive(Debug, PartialEq, Clone)]
 pub struct Range<T>
-where
-    T: PartialOrd + Clone,
-{
-    pub rtype: RangeType,
-    pub range: Closed<T>,
-}
-
-static STR_MIN: Lazy<String> = Lazy::new(|| "Min".to_string());
-static STR_MAX: Lazy<String> = Lazy::new(|| "Max".to_string());
-
-impl<T> Display for Range<T>
 where
     T: IntervalArithmetic,
 {
+    pub rtype: RangeType,
+    pub range: Interval<T>,
+}
+static STR_MIN: Lazy<String> = Lazy::new(|| "Min".to_string());
+static STR_MAX: Lazy<String> = Lazy::new(|| "Max".to_string());
+impl<T> Display for Range<T>
+where
+    T: IntervalArithmetic + std::fmt::Display,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let lower = if self.range.left.0 == T::min_value() {
-            &*STR_MIN
-        } else if self.range.left.0 == T::max_value() {
-            &*STR_MAX
+        let lower: String = if *self.range.lower().unwrap() == T::min_value() {
+            STR_MIN.clone()
+        } else if *self.range.lower().unwrap() == T::max_value() {
+            STR_MAX.clone()
         } else {
-            return write!(
-                f,
-                "{} [{}, {}]",
-                self.rtype, self.range.left.0, self.range.right.0
-            );
+            self.range.lower().unwrap().to_string()
         };
 
-        let upper = if self.range.right.0 == T::min_value() {
-            &*STR_MIN
-        } else if self.range.right.0 == T::max_value() {
-            &*STR_MAX
+        let upper: String = if *self.range.upper().unwrap() == T::min_value() {
+            STR_MIN.clone()
+        } else if *self.range.upper().unwrap() == T::max_value() {
+            STR_MAX.clone()
         } else {
-            return write!(
-                f,
-                "{} [{}, {}]",
-                self.rtype, self.range.left.0, self.range.right.0
-            );
+            self.range.upper().unwrap().to_string()
         };
-        write!(f, "{} [{}, {}]", self.rtype, lower, upper)
+
+        write!(f, "{:?} [{}, {}]", self.rtype, lower, upper)
     }
 }

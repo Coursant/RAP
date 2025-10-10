@@ -4,6 +4,7 @@
 #![allow(unused_assignments)]
 #![allow(unused_parens)]
 #![allow(non_snake_case)]
+use rust_intervals::NothingBetween;
 
 use crate::analysis::core::range_analysis::domain::ConstraintGraph::ConstraintGraph;
 use crate::analysis::core::range_analysis::{Range, RangeType};
@@ -89,26 +90,17 @@ pub trait IntervalArithmetic:
     + Add<Output = Self>
     + Sub<Output = Self>
     + Mul<Output = Self>
-    + fmt::Display
+    + core::fmt::Debug
+    + PartialOrd
+    + PartialEq
+    + NothingBetween
 {
 }
 
-impl<T> IntervalArithmetic for T where
-    T: PartialOrd
-        + Clone
-        + Bounded
-        + Zero
-        + One
-        + Copy
-        + CheckedAdd
-        + CheckedSub
-        + Add<Output = T>
-        + Sub<Output = T>
-        + Mul<Output = T>
-        + fmt::Display
-{
-}
-#[derive(Debug, Clone, PartialEq)]
+impl IntervalArithmetic for i32 {}
+impl IntervalArithmetic for usize {}
+impl IntervalArithmetic for i64 {}
+#[derive(Debug, Clone)]
 pub enum IntervalType<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     Basic(BasicInterval<T>),
     Symb(SymbInterval<'tcx, T>), // Using 'static for simplicity, adjust lifetime as needed
@@ -119,8 +111,8 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            IntervalType::Basic(b) => write!(f, "BasicInterval: {}", b.get_range()),
-            IntervalType::Symb(s) => write!(f, "SymbInterval: {}", s.get_range()),
+            IntervalType::Basic(b) => write!(f, "BasicInterval: {:?}", b.get_range()),
+            IntervalType::Symb(s) => write!(f, "SymbInterval: {:?}", s.get_range()),
         }
     }
 }
@@ -146,7 +138,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> IntervalTypeTrait<T>
         }
     }
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct BasicInterval<T: IntervalArithmetic + ConstConvert + Debug> {
     range: Range<T>,
 }
@@ -179,7 +171,7 @@ impl<T: IntervalArithmetic + ConstConvert + Debug> IntervalTypeTrait<T> for Basi
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 
 pub struct SymbInterval<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     range: Range<T>,
@@ -369,7 +361,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
         if let IntervalType::Symb(symbi) = intersect {
             let range = symbi.sym_fix_intersects(v, sink);
             rap_trace!(
-                "from {:?} to {:?} fix_intersects: {:} -> {}\n",
+                "from {:?} to {:?} fix_intersects: {:} -> {:?}\n",
                 v.get_value().clone(),
                 sink.get_value().clone(),
                 intersect.clone(),
@@ -492,7 +484,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                     if let Some(var_node) = caller_vars.get(place) {
                         let range = var_node.get_range().clone();
                         rap_trace!(
-                            "Iterator detected on place {:?}, returning its range: {}",
+                            "Iterator detected on place {:?}, returning its range: {:?}",
                             place,
                             range
                         );
@@ -510,7 +502,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                     if let Some(var_node) = caller_vars.get(place) {
                         let range = var_node.get_range().clone();
                         rap_trace!(
-                            "Iterator next detected on place {:?}, returning its range: {}",
+                            "Iterator next detected on place {:?}, returning its range: {:?}",
                             place,
                             range
                         );
@@ -531,7 +523,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                     None => {}
                 }
                 rap_trace!(
-                    "len() detected on place {:?}, returning its range: {}",
+                    "len() detected on place {:?}, returning its range: {:?}",
                     self.sink,
                     result
                 );
@@ -549,7 +541,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                 }
 
                 rap_trace!(
-                    "IndexMut detected on place {:?}, returning its range: {}",
+                    "IndexMut detected on place {:?}, returning its range: {:?}",
                     self.sink,
                     result
                 );
@@ -656,7 +648,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                 // The `rerurn_places` set in the callee's graph tracks these.
                 if let Some(return_node) = callee_cg.vars.get_mut(&Place::return_place()) {
                     return_range = return_node.get_range().clone();
-                    rap_debug!(" final return range {} ", return_range);
+                    rap_debug!(" final return range {:?} ", return_range);
                     return return_range;
                 }
                 let Some(callee_varnodes_vec) = vars_map.get_mut(&self.def_id) else {
@@ -879,7 +871,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> EssaOp<'tcx, T> {
         let source_range = vars[self.source].get_range().clone();
         let result = source_range.intersectwith(self.intersect.get_range());
         rap_trace!(
-            "EssaOp eval: {:?} {} intersectwith {}-> {}\n",
+            "EssaOp eval: {:?} {:?} intersectwith {:?} -> {:?}\n",
             self.source,
             self.intersect.get_range(),
             source_range,
@@ -1020,7 +1012,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> PhiOp<'tcx, T> {
             let node = &vars[phisource];
             result = result.unionwith(node.get_range());
             rap_trace!(
-                "PhiOp eval:  {} unionwith {} -> {}\n",
+                "PhiOp eval:  {:?} unionwith {:?} -> {:?}\n",
                 vars[first].get_range().clone(),
                 node.get_range(),
                 result
@@ -1064,7 +1056,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> RefOp<'tcx, T> {
             let range = var_node.get_range().clone();
 
             rap_trace!(
-                "RefOp eval: {:?} {} intersectwith {}\n",
+                "RefOp eval: {:?} {:?} intersectwith {:?}\n",
                 self.source,
                 self.intersect.get_range(),
                 range
@@ -1073,7 +1065,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> RefOp<'tcx, T> {
             range
         } else {
             rap_trace!(
-                "RefOp eval: {:?} not found, returning intersect {}\n",
+                "RefOp eval: {:?} not found, returning intersect {:?}\n",
                 self.source,
                 self.intersect.get_range()
             );
@@ -1110,7 +1102,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> ControlDep<'tcx, T> {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone)]
 pub struct VarNode<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     // The program variable which is represented.
     pub v: &'tcx Place<'tcx>,
