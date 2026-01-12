@@ -727,6 +727,12 @@ where
         // let place1: &Place<'tcx>;
         if let Operand::Copy(place) | Operand::Move(place) = discr {
             if let Some((op1, op2, cmp_op)) = self.extract_condition(place, block_data) {
+                rap_trace!(
+                    "build_value_branch_map op1:{:?} op2:{:?} cmp_op:{:?}\n",
+                    op1,
+                    op2,
+                    cmp_op
+                );
                 let const_op1 = op1.constant();
                 let const_op2 = op2.constant();
                 match (const_op1, const_op2) {
@@ -754,8 +760,8 @@ where
                         let value = Self::convert_const(&c.const_).unwrap();
                         let const_range =
                             Range::new(value.clone(), value.clone(), RangeType::Unknown);
-                        rap_trace!("cmp_op{:?}\n", cmp_op);
-                        rap_trace!("const_in_left{:?}\n", const_in_left);
+                        rap_trace!("cmp_op {:?}\n", cmp_op);
+                        rap_trace!("const_in_left {:?}\n", const_in_left);
                         let mut true_range =
                             self.apply_comparison(value.clone(), cmp_op, true, const_in_left);
                         let mut false_range =
@@ -874,11 +880,13 @@ where
                     let mut return_op1: &Operand<'tcx> = &op1;
                     let mut return_op2: &Operand<'tcx> = &op2;
                     for stmt_original in &switch_block.statements {
-                        if let StatementKind::Assign(box (lhs, Rvalue::Use(OP1))) =
-                            &stmt_original.kind
-                        {
-                            if lhs.clone() == op1.place().unwrap() {
-                                return_op1 = OP1;
+                        if op1.constant().is_none() {
+                            if let StatementKind::Assign(box (lhs, Rvalue::Use(OP1))) =
+                                &stmt_original.kind
+                            {
+                                if lhs.clone() == op1.place().unwrap() {
+                                    return_op1 = OP1;
+                                }
                             }
                         }
                     }
@@ -1286,7 +1294,6 @@ where
 
         let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
         let mut source: Option<&'tcx Place<'tcx>> = None;
-        rap_debug!("wtf {:?}\n", self.vars);
 
         match op {
             Operand::Copy(place) | Operand::Move(place) => {
@@ -1366,8 +1373,8 @@ where
         };
         let op = &operands[FieldIdx::from_usize(loc_2)];
         let bop_index = self.oprs.len();
-
         let BI: IntervalType<'_, T>;
+        rap_trace!("essa_op operand1 {:?}\n", source1.unwrap());
         if let Operand::Constant(c) = op {
             let vbm = self.values_branchmap.get(source1.unwrap()).unwrap();
             if block == *vbm.get_bb_true() {

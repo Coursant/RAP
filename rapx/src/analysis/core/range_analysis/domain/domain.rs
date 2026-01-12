@@ -304,17 +304,30 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
         match self {
             BasicOpKind::Unary(op) => vec![op.source],
             BasicOpKind::Binary(op) => {
-                let mut sources = vec![];
-                sources.push(op.source1.unwrap());
-                if let Some(source2) = op.source2 {
-                    sources.push(source2);
+                let mut sources = Vec::new();
+
+                if let Some(src1) = op.source1 {
+                    sources.push(src1);
                 }
+
+                if let Some(src2) = op.source2 {
+                    sources.push(src2);
+                }
+
                 sources
             }
             BasicOpKind::Essa(op) => vec![op.source],
             BasicOpKind::ControlDep(op) => vec![op.source],
             BasicOpKind::Phi(op) => op.sources.clone(),
-            BasicOpKind::Use(op) => vec![op.source.unwrap()],
+            BasicOpKind::Use(op) => {
+                let mut sources = Vec::new();
+
+                if let Some(src1) = op.source {
+                    sources.push(src1);
+                }
+
+                sources
+            }
             BasicOpKind::Call(op) => op.sources.clone(),
             BasicOpKind::Ref(op) => vec![op.source],
             BasicOpKind::Aggregate(_) => vec![],

@@ -145,12 +145,14 @@ impl<'tcx> Replacer<'tcx> {
                 if lhs == place {
                     let mut return_op1: &Operand<'tcx> = &op1;
                     let mut return_op2: &Operand<'tcx> = &op2;
-                    for stmt_original in &switch_block.statements {
-                        if let StatementKind::Assign(box (lhs, Rvalue::Use(OP1))) =
-                            &stmt_original.kind
-                        {
-                            if lhs.clone() == op1.place().unwrap() {
-                                return_op1 = OP1;
+                    if op1.constant().is_none() {
+                        for stmt_original in &switch_block.statements {
+                            if let StatementKind::Assign(box (lhs, Rvalue::Use(OP1))) =
+                                &stmt_original.kind
+                            {
+                                if lhs.clone() == op1.place().unwrap() {
+                                    return_op1 = OP1;
+                                }
                             }
                         }
                     }
@@ -351,11 +353,22 @@ impl<'tcx> Replacer<'tcx> {
                     }
                     (None, Some(_)) | (Some(_), None) => {
                         let mut operand: IndexVec<_, _> = IndexVec::with_capacity(3);
-
-                        let place = match op1 {
-                            Operand::Copy(p) | Operand::Move(p) => Place::from(p),
-                            _ => panic!("Expected a place"),
-                        };
+                        let place;
+                        // let place = match op1 {
+                        //     Operand::Copy(p) | Operand::Move(p) => Place::from(p),
+                        //     _ => panic!("Expected a place"),
+                        // };
+                        if op1.constant().is_none() {
+                            place = match op1 {
+                                Operand::Copy(p) | Operand::Move(p) => Place::from(p),
+                                _ => panic!("Expected a place"),
+                            };
+                        } else {
+                            place = match op2 {
+                                Operand::Copy(p) | Operand::Move(p) => Place::from(p),
+                                _ => panic!("Expected a place"),
+                            };
+                        }
                         operand.push(op1.clone());
                         operand.push(op2.clone());
                         let rvalue;
@@ -434,14 +447,10 @@ impl<'tcx> Replacer<'tcx> {
         locals_to_add.sort_by_key(|(new_local, _)| new_local.index());
         rap_debug!("locals_to_add {:?}", locals_to_add);
         for (new_local, original_local) in locals_to_add {
-            // 从原始 local 找到它的声明
             let original_decl = &body.local_decls[*original_local];
 
-            // 为新的 local 创建一个完全相同的声明（克隆类型、来源信息等）
             let new_decl = original_decl.clone();
 
-            // body.local_decls 是一个 IndexVec，可以直接 push
-            // push 会返回新元素的索引，这个索引应该和你生成的 new_local.index() 一致
             let pushed_index = body.local_decls.push(new_decl);
             rap_debug!("Ok with {:?} {:?}", pushed_index, *new_local);
             assert_eq!(pushed_index, *new_local);

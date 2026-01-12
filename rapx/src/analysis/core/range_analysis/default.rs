@@ -69,8 +69,7 @@ pub struct RangeAnalyzer<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     pub path_constraints: PathConstraintMap<'tcx>, // Path-sensitive constraints
 }
 
-impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> Analysis
-    for RangeAnalyzer<'tcx, T>
+impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> Analysis for RangeAnalyzer<'tcx, T>
 where
     T: IntervalArithmetic + ConstConvert + Debug,
 {
@@ -175,6 +174,10 @@ where
     }
 
     fn build_constraintgraph(&mut self, body_mut_ref: &'tcx Body<'tcx>, def_id: DefId) {
+        rap_debug!(
+            "Building ConstraintGraph for function: {}",
+            self.tcx.def_path_str(def_id)
+        );
         let ssa_def_id = self.ssa_def_id.expect("SSA definition ID is not set");
         let essa_def_id = self.essa_def_id.expect("ESSA definition ID is not set");
         let mut cg: ConstraintGraph<'tcx, T> =
@@ -201,7 +204,7 @@ where
         file.write_all(dot_output.as_bytes())
             .expect("Could not write to file");
 
-        println!("Successfully generated graph.dot");
+        rap_trace!("Successfully generated graph.dot");
         // println!("Run 'dot -Tpng -o graph.png graph.dot' to generate the image.");
     }
 
@@ -217,6 +220,7 @@ where
                 let def_id = local_def_id.to_def_id();
 
                 if self.tcx.is_mir_available(def_id) {
+                    rap_debug!("Processing function: {}", self.tcx.def_path_str(def_id));
                     let mut body = self.tcx.optimized_mir(def_id).clone();
                     let body_mut_ref = unsafe { &mut *(&mut body as *mut Body<'tcx>) };
                     // Run SSA/ESSA passes
@@ -224,7 +228,6 @@ where
                     passrunner.run_pass(body_mut_ref, ssa_def_id, essa_def_id);
                     self.body_map.insert(def_id, body);
                     // Print the MIR after SSA/ESSA passes
-                    rap_debug!("{:#?}", body_mut_ref.local_decls);
                     if self.debug {
                         print_diff(self.tcx, body_mut_ref, def_id.into());
                         print_mir_graph(self.tcx, body_mut_ref, def_id.into());
