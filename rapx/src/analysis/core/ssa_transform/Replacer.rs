@@ -173,7 +173,29 @@ impl<'tcx> Replacer<'tcx> {
         }
         None
     }
-    // pub
+    fn make_const_operand(&self, val: u64) -> Operand<'tcx> {
+        Operand::Constant(Box::new(ConstOperand {
+            span: rustc_span::DUMMY_SP,
+            user_ty: None,
+            const_: Const::from_usize(self.tcx, val),
+        }))
+    }
+
+    fn op_to_code(op: BinOp) -> u64 {
+        match op {
+            BinOp::Lt => 1,
+            BinOp::Le => 2,
+            BinOp::Ge => 3,
+            BinOp::Gt => 4,
+            BinOp::Eq => 5,
+            BinOp::Ne => 6,
+            _ => 7,
+        }
+    }
+
+    // This function inserts eSSA (extended SSA) assignment statements into the basic block.
+    // These statements capture control flow information by asserting conditions on variables
+    // based on the outcome of a switch (branching) instruction.
     fn essa_assign_statement(
         &mut self,
         bb: &BasicBlock,
@@ -184,49 +206,12 @@ impl<'tcx> Replacer<'tcx> {
     ) {
         let switch_block_data = &body.basic_blocks[*switch_block];
 
-        // let mut essa_operands: IndexVec<_, _> = IndexVec::with_capacity(2);
-        let magic_number = 213134123 as u64;
-        let magic_number_operand = Operand::Constant(Box::new(ConstOperand {
-            span: rustc_span::DUMMY_SP,
-            user_ty: None,
-            const_: Const::from_usize(self.tcx, magic_number),
-        }));
-        let Lt_operand = Operand::Constant(Box::new(ConstOperand {
-            span: rustc_span::DUMMY_SP,
-            user_ty: None,
-            const_: Const::from_usize(self.tcx, 1),
-        }));
-        let Le_operand = Operand::Constant(Box::new(ConstOperand {
-            span: rustc_span::DUMMY_SP,
-            user_ty: None,
-            const_: Const::from_usize(self.tcx, 2),
-        }));
-        let Ge_operand = Operand::Constant(Box::new(ConstOperand {
-            span: rustc_span::DUMMY_SP,
-            user_ty: None,
-            const_: Const::from_usize(self.tcx, 3),
-        }));
-        let Gt_operand = Operand::Constant(Box::new(ConstOperand {
-            span: rustc_span::DUMMY_SP,
-            user_ty: None,
-            const_: Const::from_usize(self.tcx, 4),
-        }));
-        let Eq_operand = Operand::Constant(Box::new(ConstOperand {
-            span: rustc_span::DUMMY_SP,
-            user_ty: None,
-            const_: Const::from_usize(self.tcx, 5),
-        }));
-        let Ne_operand = Operand::Constant(Box::new(ConstOperand {
-            span: rustc_span::DUMMY_SP,
-            user_ty: None,
-            const_: Const::from_usize(self.tcx, 6),
-        }));
-        let other_operand = Operand::Constant(Box::new(ConstOperand {
-            span: rustc_span::DUMMY_SP,
-            user_ty: None,
-            const_: Const::from_usize(self.tcx, 7),
-        }));
+        // Define a magic number to identify eSSA statements in Place-Place comparisons.
+        let magic_number_operand = self.make_const_operand(213134123);
+
+        // Helper: verify if the discriminant is a Place (variable).
         if let Operand::Copy(switch_place) | Operand::Move(switch_place) = discr {
+            // Attempt to extract the binary condition that led to this switch.
             if let Some((op1, op2, cmp_op)) =
                 self.extract_condition(switch_place, switch_block_data)
             {
@@ -234,56 +219,25 @@ impl<'tcx> Replacer<'tcx> {
 
                 let const_op1: Option<&ConstOperand<'_>> = op1.constant();
                 let const_op2: Option<&ConstOperand<'_>> = op2.constant();
-                let cmp_operand: Operand<'_> = match cmp_op.clone() {
-                    BinOp::Lt => Lt_operand.clone(),
-                    BinOp::Le => Le_operand.clone(),
-                    BinOp::Gt => Gt_operand.clone(),
-                    BinOp::Ge => Ge_operand.clone(),
-                    BinOp::Ne => Ne_operand.clone(),
-                    BinOp::Eq => Eq_operand.clone(),
 
-                    _ => other_operand.clone(),
-                };
+                // Generate operands for the comparison operators.
+                let cmp_operand = self.make_const_operand(Self::op_to_code(cmp_op));
+                let flip_cmp_operand =
+                    self.make_const_operand(Self::op_to_code(Self::flip(cmp_op)));
+                let reverse_cmp_operand =
+                    self.make_const_operand(Self::op_to_code(Self::reverse(cmp_op)));
+                let flip_reverse_cmp_operand =
+                    self.make_const_operand(Self::op_to_code(Self::flip(Self::reverse(cmp_op))));
 
-                let flip_cmp_operand: Operand<'_> = match Self::flip(cmp_op) {
-                    BinOp::Lt => Lt_operand.clone(),
-                    BinOp::Le => Le_operand.clone(),
-                    BinOp::Gt => Gt_operand.clone(),
-                    BinOp::Ge => Ge_operand.clone(),
-                    BinOp::Eq => Ne_operand.clone(),
-                    BinOp::Ne => Eq_operand.clone(),
-
-                    _ => other_operand.clone(),
-                };
-                let reverse_cmp_operand: Operand<'_> = match Self::reverse(cmp_op) {
-                    BinOp::Lt => Lt_operand.clone(),
-                    BinOp::Le => Le_operand.clone(),
-                    BinOp::Gt => Gt_operand.clone(),
-                    BinOp::Ge => Ge_operand.clone(),
-                    BinOp::Ne => Ne_operand.clone(),
-                    BinOp::Eq => Eq_operand.clone(),
-
-                    _ => other_operand.clone(),
-                };
-                let flip_reverse_cmp_operand: Operand<'_> = match Self::flip(Self::reverse(cmp_op))
-                {
-                    BinOp::Lt => Lt_operand.clone(),
-                    BinOp::Le => Le_operand.clone(),
-                    BinOp::Gt => Gt_operand.clone(),
-                    BinOp::Ge => Ge_operand.clone(),
-                    BinOp::Eq => Ne_operand.clone(),
-                    BinOp::Ne => Eq_operand.clone(),
-
-                    _ => other_operand.clone(),
-                };
                 match (const_op1, const_op2) {
+                    // Case 1: Both operands are places (variables).
                     (None, None) => {
                         match (op1, op2) {
                             (
                                 Operand::Copy(p1) | Operand::Move(p1),
                                 Operand::Copy(p2) | Operand::Move(p2),
                             ) => {
-                                let ADT = AggregateKind::Adt(
+                                let adt_kind = AggregateKind::Adt(
                                     self.ssatransformer.essa_def_id.clone(),
                                     rustc_abi::VariantIdx::from_u32(0),
                                     GenericArgs::empty(),
@@ -297,38 +251,43 @@ impl<'tcx> Replacer<'tcx> {
                                 let mut operand1: IndexVec<_, _> = IndexVec::with_capacity(4);
                                 let mut operand2: IndexVec<_, _> = IndexVec::with_capacity(4);
 
+                                // Determine constraints based on whether the condition was true (value != 0) or false (value == 0).
                                 if value == 0 {
+                                    // False branch: Use flipped operators.
+                                    // For p1: p1 (negated_op) p2
                                     operand1.push(Operand::Copy(Place::from(p1)));
                                     operand1.push(Operand::Copy(Place::from(p2)));
                                     operand1.push(flip_cmp_operand.clone());
                                     operand1.push(magic_number_operand.clone());
 
+                                    // For p2: p2 (negated_reversed_op) p1
                                     operand2.push(Operand::Copy(Place::from(p2)));
                                     operand2.push(Operand::Copy(Place::from(p1)));
                                     operand2.push(flip_reverse_cmp_operand.clone());
                                     operand2.push(magic_number_operand.clone());
-                                    // rvalue1 =
-                                    //     Rvalue::Aggregate(Box::new(AggregateKind::Tuple), operand1);
-                                    // rvalue2 =
-                                    //     Rvalue::Aggregate(Box::new(AggregateKind::Tuple), operand2);
-                                    rvalue1 = Rvalue::Aggregate(Box::new(ADT.clone()), operand1);
-                                    rvalue2 = Rvalue::Aggregate(Box::new(ADT.clone()), operand2);
+
+                                    rvalue1 =
+                                        Rvalue::Aggregate(Box::new(adt_kind.clone()), operand1);
+                                    rvalue2 =
+                                        Rvalue::Aggregate(Box::new(adt_kind.clone()), operand2);
                                 } else {
+                                    // True branch: Use original operators.
+                                    // For p1: p1 (op) p2
                                     operand1.push(Operand::Copy(Place::from(p1)));
                                     operand1.push(Operand::Copy(Place::from(p2)));
                                     operand1.push(cmp_operand.clone());
                                     operand1.push(magic_number_operand.clone());
 
+                                    // For p2: p2 (reversed_op) p1
                                     operand2.push(Operand::Copy(Place::from(p2)));
                                     operand2.push(Operand::Copy(Place::from(p1)));
                                     operand2.push(reverse_cmp_operand.clone());
                                     operand2.push(magic_number_operand.clone());
-                                    // rvalue1 =
-                                    //     Rvalue::Aggregate(Box::new(AggregateKind::Tuple), operand1);
-                                    // rvalue2 =
-                                    //     Rvalue::Aggregate(Box::new(AggregateKind::Tuple), operand2);
-                                    rvalue1 = Rvalue::Aggregate(Box::new(ADT.clone()), operand1);
-                                    rvalue2 = Rvalue::Aggregate(Box::new(ADT.clone()), operand2);
+
+                                    rvalue1 =
+                                        Rvalue::Aggregate(Box::new(adt_kind.clone()), operand1);
+                                    rvalue2 =
+                                        Rvalue::Aggregate(Box::new(adt_kind.clone()), operand2);
                                 }
 
                                 let assign_stmt1 = Statement::new(
@@ -339,10 +298,22 @@ impl<'tcx> Replacer<'tcx> {
                                     SourceInfo::outermost(body.span),
                                     StatementKind::Assign(Box::new((place2, rvalue2))),
                                 );
-                                block_data.statements.insert(0, assign_stmt2);
-                                block_data.statements.insert(0, assign_stmt1);
 
-                                for i in 0..2 {
+                                let mut insert_index = 0;
+                                for (i, stmt) in block_data.statements.iter().enumerate() {
+                                    if !SSATransformer::is_essa_statement(
+                                        &self.ssatransformer,
+                                        stmt,
+                                    ) {
+                                        break;
+                                    }
+                                    insert_index = i + 1;
+                                }
+
+                                block_data.statements.insert(insert_index, assign_stmt1);
+                                block_data.statements.insert(insert_index + 1, assign_stmt2);
+
+                                for i in insert_index..insert_index + 2 {
                                     let essa_in_body = block_data.statements.get_mut(i).unwrap();
                                     let essa_ptr = essa_in_body as *const _;
                                     self.ssatransformer.essa_statements.insert(essa_ptr, true);
@@ -351,51 +322,68 @@ impl<'tcx> Replacer<'tcx> {
                             _ => panic!("Expected a place"),
                         };
                     }
+
+                    // Case 2: One operand is a constant.
                     (None, Some(_)) | (Some(_), None) => {
                         let mut operand: IndexVec<_, _> = IndexVec::with_capacity(3);
                         let place;
-                        // let place = match op1 {
-                        //     Operand::Copy(p) | Operand::Move(p) => Place::from(p),
-                        //     _ => panic!("Expected a place"),
-                        // };
+
+                        // normalize operands: place always extracted as 'place', and stored first in operand list?
+                        // Actually logic keeps place as the key, but operand order in Aggregate is [Place, Other] or [Other, Place]?
+                        // Looking at logic below:
+                        // If op1 is place: operand.push(op1), operand.push(op2) -> [Place, Const]
+                        // If op2 is place: operand.push(op2), operand.push(op1) -> [Place, Const]
+                        // So the first element in Aggregate is always the Place (variable).
+
                         if op1.constant().is_none() {
                             place = match op1 {
                                 Operand::Copy(p) | Operand::Move(p) => Place::from(p),
                                 _ => panic!("Expected a place"),
                             };
+                            operand.push(op1.clone());
+                            operand.push(op2.clone());
                         } else {
                             place = match op2 {
                                 Operand::Copy(p) | Operand::Move(p) => Place::from(p),
                                 _ => panic!("Expected a place"),
                             };
+                            operand.push(op2.clone());
+                            operand.push(op1.clone());
                         }
-                        operand.push(op1.clone());
-                        operand.push(op2.clone());
+
                         let rvalue;
                         if value == 0 {
                             operand.push(flip_cmp_operand.clone());
                         } else {
                             operand.push(cmp_operand.clone());
                         }
-                        let ADT = AggregateKind::Adt(
+
+                        let adt_kind = AggregateKind::Adt(
                             self.ssatransformer.essa_def_id.clone(),
                             rustc_abi::VariantIdx::from_u32(0),
                             GenericArgs::empty(),
                             None,
                             None,
                         );
-                        rvalue = Rvalue::Aggregate(Box::new(ADT.clone()), operand);
+                        rvalue = Rvalue::Aggregate(Box::new(adt_kind.clone()), operand);
+
                         let assign_stmt = Statement::new(
                             SourceInfo::outermost(body.span),
                             StatementKind::Assign(Box::new((place, rvalue))),
                         );
-                        block_data.statements.insert(0, assign_stmt);
-
-                        for i in 0..1 {
-                            let essa_in_body = block_data.statements.get_mut(i).unwrap();
-                            let essa_ptr = essa_in_body as *const _;
-                            self.ssatransformer.essa_statements.insert(essa_ptr, true);
+                        let mut insert_index = 0;
+                        for (i, stmt) in block_data.statements.iter().enumerate() {
+                            if !SSATransformer::is_essa_statement(&self.ssatransformer, stmt) {
+                                break;
+                            }
+                            insert_index = i + 1;
                         }
+
+                        block_data.statements.insert(insert_index, assign_stmt);
+
+                        let essa_in_body = block_data.statements.get_mut(insert_index).unwrap();
+                        let essa_ptr = essa_in_body as *const _;
+                        self.ssatransformer.essa_statements.insert(essa_ptr, true);
                     }
 
                     (Some(_), Some(_)) => {}
@@ -464,7 +452,7 @@ impl<'tcx> Replacer<'tcx> {
         let successors: Vec<_> = terminator.successors().collect();
         if let TerminatorKind::SwitchInt { .. } = &terminator.kind {
             for succ_bb in successors.clone() {
-                self.process_essa_statments(succ_bb, body, bb);
+                // self.process_essa_statments(succ_bb, body, bb);
             }
         }
 
