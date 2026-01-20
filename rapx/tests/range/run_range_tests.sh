@@ -63,8 +63,11 @@ while true; do
 
     echo "========================================"
     echo "Running install.sh..."
-    "$RAP_ROOT/install.sh"
-
+    (
+        cd "$RAP_ROOT" || exit
+        ./install.sh
+    )
+    
     echo "Running test: $test_name"
     echo "Directory: $selected_dir"
     echo "Command: cargo rapx -range=print_mir"
@@ -72,7 +75,7 @@ while true; do
 
     (
         cd "$selected_dir" || exit
-        cargo rapx -range=print_mir
+        cargo rapx -range=print_mir 
         
         echo "Generating PNGs from DOT files..."
         count=0

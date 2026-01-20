@@ -397,7 +397,7 @@ where
         vars.sort_by_key(|(local, _)| local.local.index());
 
         for (&local, value) in vars {
-            rap_info!(
+            rap_debug!(
                 "Var: {:?}. [ {:?} , {:?} ]",
                 local,
                 value.interval.get_lower_expr(),

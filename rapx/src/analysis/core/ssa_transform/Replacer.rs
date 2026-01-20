@@ -122,12 +122,11 @@ impl<'tcx> Replacer<'tcx> {
 
         if let Some(terminator) = &switch_block_data.terminator {
             if let TerminatorKind::SwitchInt { discr, targets, .. } = &terminator.kind {
-                {
+                if targets.iter().count() == 2 {
                     for (value, target) in targets.iter() {
                         self.essa_assign_statement(&target, &bb, value, discr, body);
                     }
                     let otherwise = targets.otherwise();
-
                     self.essa_assign_statement(&otherwise, &bb, 1, discr, body);
                 }
             }
@@ -316,7 +315,9 @@ impl<'tcx> Replacer<'tcx> {
                                 for i in insert_index..insert_index + 2 {
                                     let essa_in_body = block_data.statements.get_mut(i).unwrap();
                                     let essa_ptr = essa_in_body as *const _;
-                                    self.ssatransformer.essa_statements.insert(essa_ptr, true);
+                                    self.ssatransformer
+                                        .essa_statements
+                                        .insert(essa_ptr, *switch_block);
                                 }
                             }
                             _ => panic!("Expected a place"),
@@ -383,7 +384,9 @@ impl<'tcx> Replacer<'tcx> {
 
                         let essa_in_body = block_data.statements.get_mut(insert_index).unwrap();
                         let essa_ptr = essa_in_body as *const _;
-                        self.ssatransformer.essa_statements.insert(essa_ptr, true);
+                        self.ssatransformer
+                            .essa_statements
+                            .insert(essa_ptr, *switch_block);
                     }
 
                     (Some(_), Some(_)) => {}
@@ -452,7 +455,7 @@ impl<'tcx> Replacer<'tcx> {
         let successors: Vec<_> = terminator.successors().collect();
         if let TerminatorKind::SwitchInt { .. } = &terminator.kind {
             for succ_bb in successors.clone() {
-                // self.process_essa_statments(succ_bb, body, bb);
+                self.process_essa_statments(succ_bb, body, bb);
             }
         }
 
@@ -460,65 +463,31 @@ impl<'tcx> Replacer<'tcx> {
             self.process_phi_functions(succ_bb, body, bb);
         }
     }
-    pub fn process_essa_statments(
+    fn process_essa_statments(
         &mut self,
         succ_bb: BasicBlock,
         body: &mut Body<'tcx>,
-        switch_bb: BasicBlock,
+        do_bb: BasicBlock,
     ) {
-        let switch_block_data = &body.basic_blocks[switch_bb];
-        if let Some(terminator) = &switch_block_data.terminator {
-            if let TerminatorKind::SwitchInt { discr, .. } = &terminator.kind {
-                if let Operand::Copy(switch_place) | Operand::Move(switch_place) = discr {
-                    if let Some((op1, op2, cmp_op)) =
-                        self.extract_condition(switch_place, switch_block_data)
-                    {
-                        if op2.constant().is_none() {
-                            let essa_statement = body.basic_blocks.as_mut()[succ_bb]
-                                .statements
-                                .get_mut(0)
-                                .unwrap();
-                            match &mut essa_statement.kind {
-                                StatementKind::Assign(box (place, rvalue)) => {
-                                    if let Rvalue::Aggregate(_, operands) = rvalue {
-                                        let loc_1: usize = 0;
-                                        let loc_2: usize = 1;
+        for statement in body.basic_blocks.as_mut()[succ_bb].statements.iter_mut() {
+            let sigma_stmt = statement as *const _;
 
-                                        operands[FieldIdx::from_usize(loc_1)] = op1.clone();
-                                        operands[FieldIdx::from_usize(loc_2)] = op2.clone();
-                                    }
-                                }
-                                _ => {}
-                            }
-                            let essa_statement = body.basic_blocks.as_mut()[succ_bb]
-                                .statements
-                                .get_mut(1)
-                                .unwrap();
-                            match &mut essa_statement.kind {
-                                StatementKind::Assign(box (place, rvalue)) => {
-                                    if let Rvalue::Aggregate(_, operands) = rvalue {
-                                        let loc_1: usize = 0;
-                                        let loc_2: usize = 1;
-                                        operands[FieldIdx::from_usize(loc_1)] = op2.clone();
-                                        operands[FieldIdx::from_usize(loc_2)] = op1.clone();
-                                    }
-                                }
-                                _ => {}
-                            }
-                        } else {
-                            let essa_statement = body.basic_blocks.as_mut()[succ_bb]
-                                .statements
-                                .get_mut(0)
-                                .unwrap();
-                            match &mut essa_statement.kind {
-                                StatementKind::Assign(box (place, rvalue)) => {
-                                    if let Rvalue::Aggregate(_, operands) = rvalue {
-                                        let loc: usize = 0;
-                                        operands[FieldIdx::from_usize(loc)] = op1.clone();
-                                    }
-                                }
-                                _ => {}
-                            }
+            if SSATransformer::is_essa_statement(&self.ssatransformer, statement) {
+                if let Some(pred) = self.ssatransformer.essa_statements.get(&sigma_stmt) {
+                    if *pred != do_bb {
+                        continue;
+                    }
+                }
+                if let StatementKind::Assign(box (_, rvalue)) = &mut statement.kind {
+                    if let Rvalue::Aggregate(_, operands) = rvalue {
+                        let operand_count = operands.len();
+                        let index = 0;
+
+                        if index < operand_count {
+                            self.replace_operand(
+                                &mut operands[FieldIdx::from_usize(index)],
+                                &do_bb,
+                            );
                         }
                     }
                 }

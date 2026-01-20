@@ -205,7 +205,6 @@ where
             .expect("Could not write to file");
 
         rap_trace!("Successfully generated graph.dot");
-        // println!("Run 'dot -Tpng -o graph.png graph.dot' to generate the image.");
     }
 
     fn only_caller_range_analysis(&mut self) {
@@ -220,7 +219,7 @@ where
                 let def_id = local_def_id.to_def_id();
 
                 if self.tcx.is_mir_available(def_id) {
-                    rap_debug!("Processing function: {}", self.tcx.def_path_str(def_id));
+                    rap_info!("Processing function: {}", self.tcx.def_path_str(def_id));
                     let mut body = self.tcx.optimized_mir(def_id).clone();
                     let body_mut_ref = unsafe { &mut *(&mut body as *mut Body<'tcx>) };
                     // Run SSA/ESSA passes
@@ -245,7 +244,7 @@ where
                 }
             }
         }
-        rap_debug!("PHASE 1 Complete. CallGraph built.");
+        rap_debug!("PHASE 1 Complete. ConstraintGraphs & CallGraphs built.");
         // self.callgraph.print_call_graph(); // Optional: for debugging
 
         // ====================================================================
