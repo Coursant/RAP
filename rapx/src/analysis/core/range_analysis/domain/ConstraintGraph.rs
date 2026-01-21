@@ -698,7 +698,9 @@ where
             if let Some(terminator) = &block_data.terminator {
                 match &terminator.kind {
                     TerminatorKind::SwitchInt { discr, targets } => {
-                        self.build_value_branch_map(body, discr, targets, bb, block_data);
+                        if targets.iter().count() == 1 {
+                            self.build_value_branch_map(body, discr, targets, bb, block_data);
+                        }
                     }
                     TerminatorKind::Goto { target } => {
                         // self.build_value_goto_map(block_index, *target);

@@ -95,15 +95,6 @@ impl<'tcx> Replacer<'tcx> {
                     .statements
                     .insert(0, phi_stmt);
             }
-
-            for i in 0..vars.len() {
-                let phi_in_body = body.basic_blocks.as_mut()[block]
-                    .statements
-                    .get_mut(i)
-                    .unwrap();
-                let phi_ptr = phi_in_body as *const _;
-                self.ssatransformer.phi_statements.insert(phi_ptr, true);
-            }
         }
     }
     pub fn insert_essa_statement(&mut self, body: &mut Body<'tcx>) {
@@ -122,10 +113,10 @@ impl<'tcx> Replacer<'tcx> {
 
         if let Some(terminator) = &switch_block_data.terminator {
             if let TerminatorKind::SwitchInt { discr, targets, .. } = &terminator.kind {
-                if targets.iter().count() == 2 {
-                    for (value, target) in targets.iter() {
-                        self.essa_assign_statement(&target, &bb, value, discr, body);
-                    }
+                if targets.iter().count() == 1 {
+                    let (value, target) = targets.iter().next().unwrap();
+                    self.essa_assign_statement(&target, &bb, value, discr, body);
+
                     let otherwise = targets.otherwise();
                     self.essa_assign_statement(&otherwise, &bb, 1, discr, body);
                 }
@@ -205,8 +196,7 @@ impl<'tcx> Replacer<'tcx> {
     ) {
         let switch_block_data = &body.basic_blocks[*switch_block];
 
-        // Define a magic number to identify eSSA statements in Place-Place comparisons.
-        let magic_number_operand = self.make_const_operand(213134123);
+        let magic_number_operand = self.make_const_operand(switch_block.as_usize() as u64);
 
         // Helper: verify if the discriminant is a Place (variable).
         if let Operand::Copy(switch_place) | Operand::Move(switch_place) = discr {
@@ -314,10 +304,11 @@ impl<'tcx> Replacer<'tcx> {
 
                                 for i in insert_index..insert_index + 2 {
                                     let essa_in_body = block_data.statements.get_mut(i).unwrap();
-                                    let essa_ptr = essa_in_body as *const _;
-                                    self.ssatransformer
-                                        .essa_statements
-                                        .insert(essa_ptr, *switch_block);
+                                    rap_trace!(
+                                        "Inserted eSSA statement {:?}  in block {:?}",
+                                        essa_in_body,
+                                        magic_number_operand
+                                    );
                                 }
                             }
                             _ => panic!("Expected a place"),
@@ -358,7 +349,7 @@ impl<'tcx> Replacer<'tcx> {
                         } else {
                             operand.push(cmp_operand.clone());
                         }
-
+                        operand.push(magic_number_operand.clone());
                         let adt_kind = AggregateKind::Adt(
                             self.ssatransformer.essa_def_id.clone(),
                             rustc_abi::VariantIdx::from_u32(0),
@@ -384,9 +375,12 @@ impl<'tcx> Replacer<'tcx> {
 
                         let essa_in_body = block_data.statements.get_mut(insert_index).unwrap();
                         let essa_ptr = essa_in_body as *const _;
-                        self.ssatransformer
-                            .essa_statements
-                            .insert(essa_ptr, *switch_block);
+
+                        rap_trace!(
+                            "Inserted eSSA statement {:?}  in block {:?}",
+                            essa_in_body,
+                            magic_number_operand
+                        );
                     }
 
                     (Some(_), Some(_)) => {}
@@ -453,9 +447,11 @@ impl<'tcx> Replacer<'tcx> {
         self.rename_terminator(bb, body);
         let terminator = body.basic_blocks[bb].terminator();
         let successors: Vec<_> = terminator.successors().collect();
-        if let TerminatorKind::SwitchInt { .. } = &terminator.kind {
-            for succ_bb in successors.clone() {
-                self.process_essa_statments(succ_bb, body, bb);
+        if let TerminatorKind::SwitchInt { targets, .. } = &terminator.kind {
+            if targets.iter().count() == 1 {
+                for succ_bb in successors.clone() {
+                    self.process_essa_statments(succ_bb, body, bb);
+                }
             }
         }
 
@@ -469,25 +465,31 @@ impl<'tcx> Replacer<'tcx> {
         body: &mut Body<'tcx>,
         do_bb: BasicBlock,
     ) {
+        // Iterate through all statements in the successor basic block to find and update ESSA nodes.
         for statement in body.basic_blocks.as_mut()[succ_bb].statements.iter_mut() {
-            let sigma_stmt = statement as *const _;
-
-            if SSATransformer::is_essa_statement(&self.ssatransformer, statement) {
-                if let Some(pred) = self.ssatransformer.essa_statements.get(&sigma_stmt) {
-                    if *pred != do_bb {
+            // Check if the current statement is an ESSA statement (identified by specific DefId).
+            if self.ssatransformer.is_essa_statement(statement) {
+                // Retrieve the source basic block ID encoded in the statement's operands.
+                // This replaces the unstable pointer-based lookup map.
+                if let Some(pred_block) = self.ssatransformer.get_essa_source_block(statement) {
+                    // Check if this ESSA statement corresponds to the predecessor block (`do_bb`)
+                    // we are currently processing. If not, skip it.
+                    if pred_block != do_bb {
                         continue;
                     }
-                }
-                if let StatementKind::Assign(box (_, rvalue)) = &mut statement.kind {
-                    if let Rvalue::Aggregate(_, operands) = rvalue {
-                        let operand_count = operands.len();
-                        let index = 0;
 
-                        if index < operand_count {
-                            self.replace_operand(
-                                &mut operands[FieldIdx::from_usize(index)],
-                                &do_bb,
-                            );
+                    // Proceed to rename the variable in the ESSA statement.
+                    if let StatementKind::Assign(box (_, rvalue)) = &mut statement.kind {
+                        if let Rvalue::Aggregate(_, operands) = rvalue {
+                            // The first operand (index 0) is the variable that needs to be renamed/replaced.
+                            let index = 0;
+                            if index < operands.len() {
+                                // Replace the operand with the correct SSA version for the current path.
+                                self.replace_operand(
+                                    &mut operands[FieldIdx::from_usize(index)],
+                                    &do_bb,
+                                );
+                            }
                         }
                     }
                 }
@@ -539,10 +541,22 @@ impl<'tcx> Replacer<'tcx> {
             // let rc_stat = Rc::new(RefCell::new(statement));
             let is_phi = SSATransformer::is_phi_statement(&self.ssatransformer, statement);
             let is_essa = SSATransformer::is_essa_statement(&self.ssatransformer, statement);
+            rap_trace!(
+                "IS in statement at block {:?}: {:?}, is_phi: {}, is_essa: {}",
+                bb,
+                statement.clone(),
+                is_phi,
+                is_essa
+            );
             match &mut statement.kind {
                 StatementKind::Assign(box (place, rvalue)) => {
                     if !is_phi {
                         if !is_essa {
+                            rap_trace!(
+                                "Renaming in statement at block {:?}: {:?}",
+                                bb,
+                                rvalue.clone()
+                            );
                             self.replace_rvalue(rvalue, &bb);
                             self.rename_local_def(place, &bb, true);
                         } else {
