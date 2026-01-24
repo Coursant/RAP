@@ -450,16 +450,16 @@ impl<'tcx> Replacer<'tcx> {
         if let TerminatorKind::SwitchInt { targets, .. } = &terminator.kind {
             if targets.iter().count() == 1 {
                 for succ_bb in successors.clone() {
-                    self.process_essa_statments(succ_bb, body, bb);
+                    self.rename_essa_statments(succ_bb, body, bb);
                 }
             }
         }
 
         for succ_bb in successors {
-            self.process_phi_functions(succ_bb, body, bb);
+            self.rename_phi_functions(succ_bb, body, bb);
         }
     }
-    fn process_essa_statments(
+    fn rename_essa_statments(
         &mut self,
         succ_bb: BasicBlock,
         body: &mut Body<'tcx>,
@@ -497,45 +497,42 @@ impl<'tcx> Replacer<'tcx> {
         }
     }
 
-    fn process_phi_functions(
+    fn rename_phi_functions(
         &mut self,
         succ_bb: BasicBlock,
         body: &mut Body<'tcx>,
         do_bb: BasicBlock,
     ) {
-        for statement in body.basic_blocks.as_mut()[succ_bb].statements.iter_mut() {
-            let phi_stmt = statement as *const _;
+        for (stmt_idx, statement) in body.basic_blocks.as_mut()[succ_bb]
+            .statements
+            .iter_mut()
+            .enumerate()
+        {
+            let location = Location {
+                block: succ_bb,
+                statement_index: stmt_idx,
+            };
 
             if SSATransformer::is_phi_statement(&self.ssatransformer, statement) {
                 if let StatementKind::Assign(box (_, rvalue)) = &mut statement.kind {
                     if let Rvalue::Aggregate(_, operands) = rvalue {
                         let operand_count = operands.len();
-                        let index = self
-                            .ssatransformer
-                            .phi_index
-                            .entry(phi_stmt)
-                            .or_insert(0)
-                            .clone();
+                        let index = *self.ssatransformer.phi_index.entry(location).or_insert(0);
 
                         if index < operand_count {
-                            // self.replace_operand(&mut operands[(index).into()], &succ_bb);s
                             match &mut operands[FieldIdx::from_usize(index)] {
                                 Operand::Copy(place) | Operand::Move(place) => {
                                     self.replace_place(place, &do_bb);
                                 }
                                 _ => {}
                             }
-                            *self.ssatransformer.phi_index.entry(phi_stmt).or_insert(0) += 1;
-                            // if *index >= operand_count {
-                            //     self.ssatransformer.phi_index.remove(&phi_stmt);
-                            // }
+                            *self.ssatransformer.phi_index.entry(location).or_insert(0) += 1;
                         }
                     }
                 }
             }
         }
     }
-
     pub fn rename_statement(&mut self, bb: BasicBlock, body: &mut Body<'tcx>) {
         for statement in body.basic_blocks.as_mut()[bb].statements.iter_mut() {
             // let rc_stat = Rc::new(RefCell::new(statement));

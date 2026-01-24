@@ -397,7 +397,7 @@ where
         vars.sort_by_key(|(local, _)| local.local.index());
 
         for (&local, value) in vars {
-            rap_debug!(
+            rap_info!(
                 "Var: {:?}. [ {:?} , {:?} ]",
                 local,
                 value.interval.get_lower_expr(),
@@ -1557,7 +1557,6 @@ where
 
         self.defmap.insert(sink, bop_index);
     }
-
     fn add_binary_op(
         &mut self,
         sink: &'tcx Place<'tcx>,
@@ -1568,72 +1567,78 @@ where
         bin_op: BinOp,
     ) {
         rap_trace!("binary_op{:?}\n", inst);
+
+        // Define the sink node (Def)
         let sink_node = self.def_add_varnode_sym(sink, rvalue);
         rap_trace!("addsink_in_binary_op{:?}\n", sink_node);
+
         let bop_index = self.oprs.len();
-        let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
+        let bi: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
 
-        let source1_place = match op1 {
-            Operand::Copy(place) | Operand::Move(place) => {
-                self.use_add_varnode_sym(place, rvalue);
-                rap_trace!("addvar_in_binary_op{:?}\n", place);
+        // Match both operands simultaneously to handle all combinations.
+        // Goal: Ensure source1 is always a Place if at least one Place exists.
+        let (source1_place, source2_place, const_val) = match (op1, op2) {
+            // Case 1: Place + Place
+            (Operand::Copy(p1) | Operand::Move(p1), Operand::Copy(p2) | Operand::Move(p2)) => {
+                self.use_add_varnode_sym(p1, rvalue);
+                self.use_add_varnode_sym(p2, rvalue);
+                rap_trace!("addvar_in_binary_op p1:{:?}, p2:{:?}\n", p1, p2);
 
-                Some(place)
+                (Some(p1), Some(p2), None)
             }
-            Operand::Constant(_) => None,
-        };
 
-        match op2 {
-            Operand::Copy(place) | Operand::Move(place) => {
-                self.use_add_varnode_sym(place, rvalue);
-                rap_trace!("addvar_in_binary_op{:?}\n", place);
+            // Case 2: Place + Constant
+            (Operand::Copy(p1) | Operand::Move(p1), Operand::Constant(c2)) => {
+                self.use_add_varnode_sym(p1, rvalue);
+                rap_trace!("addvar_in_binary_op p1:{:?}\n", p1);
 
-                let source2_place = Some(place);
-                let BOP = BinaryOp::new(
-                    IntervalType::Basic(BI),
-                    sink,
-                    inst,
-                    source1_place,
-                    source2_place,
-                    None,
-                    bin_op.clone(),
-                );
-                self.oprs.push(BasicOpKind::Binary(BOP));
-                // let bop_ref = unsafe { &*(self.oprs.last().unwrap() as *const BasicOp<'tcx, T>) };
-                self.defmap.insert(sink, bop_index);
-                if let Some(place) = source1_place {
-                    self.usemap.entry(place).or_default().insert(bop_index);
-                }
-
-                if let Some(place) = source2_place {
-                    self.usemap.entry(place).or_default().insert(bop_index);
-                }
+                (Some(p1), None, Some(c2.const_))
             }
-            Operand::Constant(c) => {
-                // let const_value = Self::convert_const(&c.const_).unwrap();
-                let BOP = BinaryOp::new(
-                    IntervalType::Basic(BI),
-                    sink,
-                    inst,
-                    source1_place,
-                    None,
-                    Some(c.const_),
-                    bin_op.clone(),
-                );
-                self.oprs.push(BasicOpKind::Binary(BOP));
-                // let bop_ref = unsafe { &*(self.oprs.last().unwrap() as *const BasicOp<'tcx, T>) };
-                self.defmap.insert(sink, bop_index);
-                if let Some(place) = source1_place {
-                    self.usemap.entry(place).or_default().insert(bop_index);
-                }
+
+            // Case 3: Constant + Place
+            // Here we normalize: Treat the Place (op2) as source1, and the Constant (op1) as the const value.
+            // NOTE: Be careful with non-commutative operations (Sub, Div) in your interval logic later,
+            // as the physical order is swapped here.
+            (Operand::Constant(c1), Operand::Copy(p2) | Operand::Move(p2)) => {
+                self.use_add_varnode_sym(p2, rvalue);
+                rap_trace!("addvar_in_binary_op p2(as source1):{:?}\n", p2);
+
+                // Assign p2 to the first return position to make it source1
+                (Some(p2), None, Some(c1.const_))
+            }
+
+            // Case 4: Constant + Constant
+            (Operand::Constant(c1), Operand::Constant(_)) => {
+                // Logic depends on how you want to handle two constants.
+                // Usually keeping one is sufficient for the struct signature.
+                (None, None, Some(c1.const_))
             }
         };
 
-        // rap_trace!("varnodes{:?}\n", self.vars);
-        // rap_trace!("defmap{:?}\n", self.defmap);
-        // rap_trace!("usemap{:?}\n", self.usemap);
-        // rap_trace!("{:?}add_binary_op{:?}\n", inst,sink);
-        // ...
+        // Construct the BinaryOp
+        let bop = BinaryOp::new(
+            IntervalType::Basic(bi),
+            sink,
+            inst,
+            source1_place, // This is guaranteed to be the Place (if one exists)
+            source2_place,
+            const_val,
+            bin_op.clone(),
+        );
+
+        self.oprs.push(BasicOpKind::Binary(bop));
+
+        // Update DefMap
+        self.defmap.insert(sink, bop_index);
+
+        // Update UseMap
+        if let Some(place) = source1_place {
+            self.usemap.entry(place).or_default().insert(bop_index);
+        }
+
+        if let Some(place) = source2_place {
+            self.usemap.entry(place).or_default().insert(bop_index);
+        }
     }
     fn add_ref_op(
         &mut self,

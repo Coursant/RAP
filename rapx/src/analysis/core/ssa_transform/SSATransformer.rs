@@ -27,7 +27,7 @@ pub struct SSATransformer<'tcx> {
     pub local_index: usize,
     pub local_defination_block: HashMap<Local, BasicBlock>,
     pub skipped: HashSet<usize>,
-    pub phi_index: HashMap<*const Statement<'tcx>, usize>,
+    pub phi_index: HashMap<Location, usize>,
     pub phi_def_id: DefId,
     pub essa_def_id: DefId,
     pub ref_local_map: HashMap<Local, Local>,
