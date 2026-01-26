@@ -28,7 +28,7 @@ extern crate rustc_trait_selection;
 extern crate rustc_traits;
 extern crate rustc_type_ir;
 extern crate thin_vec;
-use crate::analysis::scan::ScanAnalysis;
+use crate::analysis::{core::alias_analysis::mfp::MfpAliasAnalyzer, scan::ScanAnalysis};
 use analysis::{
     Analysis,
     core::{
@@ -78,6 +78,7 @@ pub static RAP_DEFAULT_ARGS: &[&str] = &[
 #[derive(Debug, Clone, Hash)]
 pub struct RapCallback {
     alias: bool,
+    alias_mfp: bool,
     api_dependency: bool,
     callgraph: bool,
     dataflow: usize,
@@ -103,6 +104,7 @@ impl Default for RapCallback {
     fn default() -> Self {
         Self {
             alias: false,
+            alias_mfp: false,
             api_dependency: false,
             callgraph: false,
             dataflow: 0,
@@ -143,11 +145,18 @@ impl Callbacks for RapCallback {
 
     fn after_crate_root_parsing(
         &mut self,
-        _compiler: &interface::Compiler,
+        compiler: &interface::Compiler,
         krate: &mut ast::Crate,
     ) -> Compilation {
-        preprocess::dummy_fns::create_dummy_fns(krate);
-        preprocess::ssa_preprocess::create_ssa_struct(krate);
+        let build_std = compiler
+            .sess
+            .opts
+            .crate_name
+            .as_deref()
+            .map(|s| matches!(s, "core" | "std"))
+            .unwrap_or(false);
+        preprocess::dummy_fns::create_dummy_fns(krate, build_std);
+        preprocess::ssa_preprocess::create_ssa_struct(krate, build_std);
         Compilation::Continue
     }
     fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
@@ -211,6 +220,14 @@ impl RapCallback {
     /// Test if alias analysis is enabled.
     pub fn is_alias_enabled(&self) -> bool {
         self.alias
+    }
+
+    pub fn enable_alias_mfp(&mut self) {
+        self.alias_mfp = true;
+    }
+
+    pub fn is_alias_mfp_enabled(&self) -> bool {
+        self.alias_mfp
     }
 
     /// Enable API-dependency graph generation.
@@ -425,6 +442,13 @@ impl RapCallback {
 pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
     if callback.is_alias_enabled() {
         let mut analyzer = AliasAnalyzer::new(tcx);
+        analyzer.run();
+        let alias = analyzer.get_local_fn_alias();
+        rap_info!("{}", FnAliasMapWrapper(alias));
+    }
+
+    if callback.is_alias_mfp_enabled() {
+        let mut analyzer = MfpAliasAnalyzer::new(tcx);
         analyzer.run();
         let alias = analyzer.get_local_fn_alias();
         rap_info!("{}", FnAliasMapWrapper(alias));

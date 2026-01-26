@@ -48,7 +48,7 @@ pub struct MopGraph<'tcx> {
 impl<'tcx> MopGraph<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>, def_id: DefId) -> MopGraph<'tcx> {
         let fn_name = get_fn_name(tcx, def_id);
-        rap_info!("New a MopGraph for: {:?}", fn_name);
+        rap_debug!("New a MopGraph for: {:?}", fn_name);
         // handle variables
         let body = tcx.optimized_mir(def_id);
         //display_mir(def_id, body);
@@ -423,13 +423,7 @@ impl<'tcx> MopGraph<'tcx> {
                 } => {
                     if let Operand::Constant(c) = func {
                         if let &ty::FnDef(id, ..) = c.ty().kind() {
-                            // for no_std crates without using alloc,
-                            // dealloc will be never found, thus call dealloc_opt here
-                            if id == drop()
-                                || id == drop_in_place()
-                                || id == manually_drop()
-                                || dealloc_opt().map(|f| f == id).unwrap_or(false)
-                            {
+                            if is_drop_fn(id) {
                                 cur_bb.terminator = Term::Drop(terminator.clone());
                             } else {
                                 cur_bb.terminator = Term::Call(terminator.clone());
@@ -660,7 +654,7 @@ pub fn scc_handler<'tcx, T: SccHelper<'tcx> + Scc + Clone + Display>(
         }
     }
 
-    rap_info!("Scc Info: {:?}", graph.blocks_mut()[root].scc);
+    rap_debug!("Scc Info: {:?}", graph.blocks_mut()[root].scc);
     // Recursively detect sub sccs within the scc.
     // This is performed on a modified graph with the starting node and scc components only;
     // Before modification, we have to backup corresponding information.
