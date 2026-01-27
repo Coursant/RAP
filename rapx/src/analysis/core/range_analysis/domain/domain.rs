@@ -451,6 +451,24 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                 );
                 return result;
             }
+            "std::ops::Index::index" => {
+                let mut result = Range::default(T::min_value());
+
+                match self.args.last() {
+                    Some(Operand::Copy(place)) | Some(Operand::Move(place)) => {
+                        result = caller_vars[place].get_range().clone();
+                    }
+                    Some(Operand::Constant(c)) => {}
+                    None => {}
+                }
+
+                rap_trace!(
+                    "Index detected on place {:?}, returning its range: {:?}",
+                    self.sink,
+                    result
+                );
+                return result;
+            }
             "core::panicking::panic" | "std::panicking::panic" => {
                 rap_trace!("Panic call detected, returning bottom range.");
                 return Range::new(T::max_value(), T::min_value(), RangeType::Empty);

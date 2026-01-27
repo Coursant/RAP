@@ -1,13 +1,18 @@
 
 pub fn main(){
-    let pieces : [u8; 8]= [42; 8];
+    let pieces = [42; 8];
     let mut i = 0;
-    let len = pieces.len();
-    while i < len {
-        let val = pieces[i]; 
+        let slice_index = 8;
+
+    let slice = & pieces[1..slice_index];
+        let len = slice.len();
+
+    while i < 2*len {
+        let mut val = slice[i]; 
         if val > 128 {
-            i += 2;
+            val+=1;
+            // i *= 2;
         } else {
-            i += 1;
+            i *= 21;
         }
     }}

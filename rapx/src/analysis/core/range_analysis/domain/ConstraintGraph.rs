@@ -717,19 +717,87 @@ where
         // rap_trace!("value_branchmap{:?}\n", self.values_branchmap);
         // rap_trace!("varnodes{:?}\n,", self.vars);
     }
+    fn trace_operand_source(
+        &self,
+        body: &'tcx Body<'tcx>,
+        mut current_block: BasicBlock,
+        target_place: Place<'tcx>,
+    ) -> Option<&'tcx Operand<'tcx>> {
+        let mut visited = HashSet::new();
+        let target_local = target_place.local;
 
+        while visited.insert(current_block) {
+            let data = &body.basic_blocks[current_block];
+
+            // 逆序扫描当前块
+            for stmt in data.statements.iter().rev() {
+                if let StatementKind::Assign(box (lhs, rvalue)) = &stmt.kind {
+                    // 只要找到了对目标变量的赋值语句
+                    if lhs.local == target_local {
+                        rap_debug!(
+                            "Tracing source for {:?} in block {:?} {:?}\n",
+                            target_place,
+                            current_block,
+                            rvalue
+                        );
+                        return match rvalue {
+                            // 如果右值是 Operand (例如 _2 = _1 或 _2 = const 5)
+                            // 直接返回这个 Operand 的引用，不再往上追 _1 的来源
+                            Rvalue::Use(op) => Some(op),
+
+                            // 如果右值是计算结果 (例如 _2 = Add(_3, _4))
+                            // 说明 _2 的来源就在这里，但它不是一个独立的 Operand 对象，返回 None
+                            _ => None,
+                        };
+                    }
+                }
+            }
+
+            // 当前块没找到，尝试回溯唯一的前驱块
+            let preds = &body.basic_blocks.predecessors()[current_block];
+            if preds.len() == 1 {
+                current_block = preds[0];
+            } else {
+                break;
+            }
+        }
+
+        None
+    }
     pub fn build_value_branch_map(
         &mut self,
-        body: &Body<'tcx>,
+        body: &'tcx Body<'tcx>,
         discr: &'tcx Operand<'tcx>,
         targets: &'tcx SwitchTargets,
-        block: BasicBlock,
+        switch_block: BasicBlock,
         block_data: &'tcx BasicBlockData<'tcx>,
     ) {
         // let place1: &Place<'tcx>;
+        let first_target = targets.all_targets()[0];
+        let target_data = &body.basic_blocks[first_target];
+
         if let Operand::Copy(place) | Operand::Move(place) = discr {
             if let Some((op1, op2, cmp_op)) = self.extract_condition(place, block_data) {
-                rap_trace!(
+                rap_debug!(
+                    "extract_condition op1:{:?} op2:{:?} cmp_op:{:?}\n",
+                    op1,
+                    op2,
+                    cmp_op
+                );
+                let op1 = if let Some(p1) = op1.place() {
+                    self.trace_operand_source(body, switch_block, p1)
+                        .unwrap_or(op1)
+                } else {
+                    op1
+                };
+
+                let op2 = if let Some(p2) = op2.place() {
+                    self.trace_operand_source(body, switch_block, p2)
+                        .unwrap_or(op2)
+                } else {
+                    op2
+                };
+                rap_debug!(
                     "build_value_branch_map op1:{:?} op2:{:?} cmp_op:{:?}\n",
                     op1,
                     op2,
@@ -825,7 +893,7 @@ where
                             ValueBranchMap::new(p2, &target_vec[0], &target_vec[1], SFOp2, STOp2);
                         self.values_branchmap.insert(&p1, vbm_1);
                         self.values_branchmap.insert(&p2, vbm_2);
-                        self.switchbbs.insert(block, (*p1, *p2));
+                        self.switchbbs.insert(switch_block, (*p1, *p2));
                     }
                 }
             };
@@ -881,28 +949,28 @@ where
                 if lhs == place {
                     let mut return_op1: &Operand<'tcx> = &op1;
                     let mut return_op2: &Operand<'tcx> = &op2;
-                    for stmt_original in &switch_block.statements {
-                        if op1.constant().is_none() {
-                            if let StatementKind::Assign(box (lhs, Rvalue::Use(OP1))) =
-                                &stmt_original.kind
-                            {
-                                if lhs.clone() == op1.place().unwrap() {
-                                    return_op1 = OP1;
-                                }
-                            }
-                        }
-                    }
-                    if op2.constant().is_none() {
-                        for stmt_original in &switch_block.statements {
-                            if let StatementKind::Assign(box (lhs, Rvalue::Use(OP2))) =
-                                &stmt_original.kind
-                            {
-                                if lhs.clone() == op2.place().unwrap() {
-                                    return_op2 = OP2;
-                                }
-                            }
-                        }
-                    }
+                    // for stmt_original in &switch_block.statements {
+                    //     if op1.constant().is_none() {
+                    //         if let StatementKind::Assign(box (lhs, Rvalue::Use(OP1))) =
+                    //             &stmt_original.kind
+                    //         {
+                    //             if lhs.clone() == op1.place().unwrap() {
+                    //                 return_op1 = OP1;
+                    //             }
+                    //         }
+                    //     }
+                    // }
+                    // if op2.constant().is_none() {
+                    //     for stmt_original in &switch_block.statements {
+                    //         if let StatementKind::Assign(box (lhs, Rvalue::Use(OP2))) =
+                    //             &stmt_original.kind
+                    //         {
+                    //             if lhs.clone() == op2.place().unwrap() {
+                    //                 return_op2 = OP2;
+                    //             }
+                    //         }
+                    //     }
+                    // }
 
                     return Some((return_op1, return_op2, *bin_op));
                 }

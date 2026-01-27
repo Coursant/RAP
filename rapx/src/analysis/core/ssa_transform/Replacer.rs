@@ -38,21 +38,32 @@ impl<'tcx> Replacer<'tcx> {
             if let Some(def_blocks) = self.ssatransformer.local_assign_blocks.get(var) {
                 let mut worklist: VecDeque<BasicBlock> = def_blocks.iter().cloned().collect();
                 let mut processed: HashSet<BasicBlock> = HashSet::new();
-
                 while let Some(block) = worklist.pop_front() {
                     if let Some(df_blocks) = self.ssatransformer.df.get(&block) {
                         for &df_block in df_blocks {
                             if !processed.contains(&df_block) {
                                 phi_functions.get_mut(&df_block).unwrap().insert(*var);
                                 processed.insert(df_block);
-                                if self.ssatransformer.local_assign_blocks[var].contains(&df_block)
-                                {
-                                    worklist.push_back(df_block);
-                                }
+
+                                worklist.push_back(df_block);
                             }
                         }
                     }
                 }
+                // while let Some(block) = worklist.pop_front() {
+                //     if let Some(df_blocks) = self.ssatransformer.df.get(&block) {
+                //         for &df_block in df_blocks {
+                //             if !processed.contains(&df_block) {
+                //                 phi_functions.get_mut(&df_block).unwrap().insert(*var);
+                //                 processed.insert(df_block);
+                //                 if self.ssatransformer.local_assign_blocks[var].contains(&df_block)
+                //                 {
+                //                     worklist.push_back(df_block);
+                //                 }
+                //             }
+                //         }
+                //     }
+                // }
             }
         }
 
@@ -123,6 +134,7 @@ impl<'tcx> Replacer<'tcx> {
             }
         }
     }
+
     fn extract_condition(
         &self,
         place: &Place<'tcx>,
@@ -133,30 +145,9 @@ impl<'tcx> Replacer<'tcx> {
                 &stmt.kind
             {
                 if lhs == place {
-                    let mut return_op1: &Operand<'tcx> = &op1;
-                    let mut return_op2: &Operand<'tcx> = &op2;
-                    if op1.constant().is_none() {
-                        for stmt_original in &switch_block.statements {
-                            if let StatementKind::Assign(box (lhs, Rvalue::Use(OP1))) =
-                                &stmt_original.kind
-                            {
-                                if lhs.clone() == op1.place().unwrap() {
-                                    return_op1 = OP1;
-                                }
-                            }
-                        }
-                    }
-                    if op2.constant().is_none() {
-                        for stmt_original in &switch_block.statements {
-                            if let StatementKind::Assign(box (lhs, Rvalue::Use(OP2))) =
-                                &stmt_original.kind
-                            {
-                                if lhs.clone() == op2.place().unwrap() {
-                                    return_op2 = OP2;
-                                }
-                            }
-                        }
-                    }
+                    let return_op1: &Operand<'tcx> = &op1;
+                    let return_op2: &Operand<'tcx> = &op2;
+
                     return Some((return_op1.clone(), return_op2.clone(), *bin_op));
                 }
             }
@@ -182,7 +173,38 @@ impl<'tcx> Replacer<'tcx> {
             _ => 7,
         }
     }
+    fn trace_operand_source(
+        &self,
+        body: &Body<'tcx>,
+        mut current_block: BasicBlock,
+        target_place: Place<'tcx>,
+    ) -> Operand<'tcx> {
+        let mut visited = HashSet::new();
+        let current_place = target_place;
 
+        while visited.insert(current_block) {
+            let data = &body.basic_blocks[current_block];
+            for stmt in data.statements.iter().rev() {
+                if let StatementKind::Assign(box (lhs, rvalue)) = &stmt.kind {
+                    if *lhs == current_place {
+                        match rvalue {
+                            Rvalue::Use(op) => return op.clone(),
+                            _ => return Operand::Copy(current_place),
+                        }
+                    }
+                }
+            }
+
+            let preds = &body.basic_blocks.predecessors()[current_block];
+            if preds.len() == 1 {
+                current_block = preds[0];
+            } else {
+                break;
+            }
+        }
+
+        Operand::Copy(current_place)
+    }
     // This function inserts eSSA (extended SSA) assignment statements into the basic block.
     // These statements capture control flow information by asserting conditions on variables
     // based on the outcome of a switch (branching) instruction.
@@ -204,6 +226,24 @@ impl<'tcx> Replacer<'tcx> {
             if let Some((op1, op2, cmp_op)) =
                 self.extract_condition(switch_place, switch_block_data)
             {
+                let op1 = if let Some(p1) = op1.place() {
+                    self.trace_operand_source(body, *switch_block, p1)
+                } else {
+                    op1
+                };
+
+                let op2 = if let Some(p2) = op2.place() {
+                    self.trace_operand_source(body, *switch_block, p2)
+                } else {
+                    op2
+                };
+                rap_debug!(
+                    "essa trace_operand_source op1:{:?} op2:{:?} cmp_op:{:?} value:{:?}\n",
+                    op1,
+                    op2,
+                    cmp_op,
+                    value
+                );
                 let block_data: &mut BasicBlockData<'tcx> = &mut body.basic_blocks.as_mut()[*bb];
 
                 let const_op1: Option<&ConstOperand<'_>> = op1.constant();
