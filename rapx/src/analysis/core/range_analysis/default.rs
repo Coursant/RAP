@@ -52,7 +52,6 @@ pub struct RangeAnalyzer<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     pub essa_def_id: Option<DefId>, // ESSA marker function DefId
 
     pub final_vars: RAResultMap<'tcx, T>, // Final merged interval results
-
     // Mapping from original places to SSA-renamed places
     pub ssa_places_mapping: FxHashMap<DefId, HashMap<Place<'tcx>, HashSet<Place<'tcx>>>>,
 
@@ -110,13 +109,6 @@ where
 
     fn get_all_fn_ranges_percall(&self) -> RAVecResultMap<'tcx, T> {
         self.final_vars_vec.clone()
-    }
-
-    /// Query the range of a specific local variable
-    fn get_fn_local_range(&self, def_id: DefId, place: Place<'tcx>) -> Option<Range<T>> {
-        self.final_vars
-            .get(&def_id)
-            .and_then(|vars| vars.get(&place).cloned())
     }
 
     fn get_fn_path_constraints(&self, def_id: DefId) -> Option<PathConstraint<'tcx>> {
@@ -233,7 +225,7 @@ where
                     }
 
                     self.ssa_places_mapping
-                        .insert(def_id, passrunner.places_map.clone());
+                        .insert(def_id, passrunner.original_locals_map.clone());
                     // rap_debug!("ssa_places_mapping: {:?}", self.ssa_places_mapping);
                     // Build and store the constraint graph
                     self.build_constraintgraph(body_mut_ref, def_id);
@@ -293,11 +285,9 @@ where
         for def_id in analysis_order {
             if let Some(cg_cell) = self.cg_map.get(&def_id) {
                 let mut cg = cg_cell.borrow_mut();
-                let (final_vars_for_fn, _) = cg.build_final_vars(&self.ssa_places_mapping[&def_id]);
-                let mut ranges_for_fn = HashMap::new();
-                for (&place, varnode) in final_vars_for_fn {
-                    ranges_for_fn.insert(place, varnode.get_range().clone());
-                }
+
+                let ranges_for_fn = cg.build_final_vars(&self.ssa_places_mapping[&def_id]);
+
                 let Some(varnodes_vec) = self.vars_map.get_mut(&def_id) else {
                     rap_debug!(
                         "Warning: No VarNodes found for DefId {:?} during analysis of call chain starts.",
@@ -305,16 +295,16 @@ where
                     );
                     continue;
                 };
-                for varnodes in varnodes_vec.iter_mut() {
-                    let ranges_for_fn_recursive = ConstraintGraph::filter_final_vars(
-                        &varnodes.borrow(),
-                        &self.ssa_places_mapping[&def_id],
-                    );
-                    self.final_vars_vec
-                        .entry(def_id)
-                        .or_default()
-                        .push(ranges_for_fn_recursive);
-                }
+                // for varnodes in varnodes_vec.iter_mut() {
+                //     let ranges_for_fn_recursive = ConstraintGraph::filter_final_vars(
+                //         &varnodes.borrow(),
+                //         &self.ssa_places_mapping[&def_id],
+                //     );
+                //     self.final_vars_vec
+                //         .entry(def_id)
+                //         .or_default()
+                //         .push(ranges_for_fn_recursive);
+                // };
 
                 self.final_vars.insert(def_id, ranges_for_fn);
             }

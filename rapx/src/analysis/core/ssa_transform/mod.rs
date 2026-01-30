@@ -8,7 +8,7 @@
 pub mod Replacer;
 pub mod SSATransformer;
 
-use crate::{rap_info, rap_warn};
+use crate::{rap_trace, rap_warn};
 use rustc_hir::{
     def::DefKind,
     def_id::{DefId, LocalDefId},
@@ -20,6 +20,7 @@ use rustc_middle::{
     },
     ty::TyCtxt,
 };
+use rustc_span::sym::ne;
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
@@ -90,14 +91,14 @@ impl<'tcx> SSATrans<'tcx> {
             passrunner.run_pass(body_mut_ref, ssa_def_id, essa_def_id);
             // passrunner.print_diff(body_mut_ref);
             let essa_mir_string = passrunner.get_final_ssa_as_string(body_mut_ref);
-            // rap_info!("final SSA {:?}\n", &essa_mir_string);
-            rap_info!("ssa lvalue check {:?}", lvalue_check(&essa_mir_string));
+            // rap_trace!("final SSA {:?}\n", &essa_mir_string);
+            rap_trace!("ssa lvalue check {:?}", lvalue_check(&essa_mir_string));
         }
     }
 }
 pub struct PassRunner<'tcx> {
     tcx: TyCtxt<'tcx>,
-    pub places_map: HashMap<Place<'tcx>, HashSet<Place<'tcx>>>,
+    pub original_locals_map: HashMap<Place<'tcx>, HashSet<Place<'tcx>>>,
 }
 pub fn lvalue_check(mir_string: &str) -> bool {
     let re = regex::Regex::new(r"_(\d+)\s*=").unwrap();
@@ -200,7 +201,7 @@ impl<'tcx> PassRunner<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>) -> Self {
         Self {
             tcx,
-            places_map: HashMap::default(),
+            original_locals_map: HashMap::default(),
         }
     }
 
@@ -225,6 +226,21 @@ impl<'tcx> PassRunner<'tcx> {
         replacer.insert_phi_statment(body);
         replacer.insert_essa_statement(body);
         replacer.rename_variables(body);
-        self.places_map = replacer.ssatransformer.places_map.clone();
+        self.original_locals_map = replacer.ssatransformer.original_locals_map.clone();
+        let mut new_places = 0;
+        let mut old_places = 0;
+        for (place, new_places_set) in &replacer.ssatransformer.places_map {
+            old_places += 1;
+            new_places += new_places_set.len();
+        }
+        rap_trace!(
+            "places_map: {:?} \n 
+            original_locals_map: {:?} \n 
+            old_places: {:?} new_places: {:?}",
+            replacer.ssatransformer.places_map,
+            replacer.ssatransformer.original_locals_map,
+            old_places,
+            new_places
+        );
     }
 }

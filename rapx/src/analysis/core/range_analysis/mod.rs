@@ -22,9 +22,11 @@ use std::{
     collections::HashMap,
     fmt::{self, Debug, Display},
 };
-pub type RAResult<'tcx, T> = HashMap<Place<'tcx>, Range<T>>;
-pub type RAResultMap<'tcx, T> = FxHashMap<DefId, HashMap<Place<'tcx>, Range<T>>>;
-pub type RAVecResultMap<'tcx, T> = FxHashMap<DefId, Vec<HashMap<Place<'tcx>, Range<T>>>>;
+pub type RAResult<'tcx, T> = HashMap<Place<'tcx>, HashMap<Place<'tcx>, Range<T>>>;
+pub type RAResultMap<'tcx, T> =
+    FxHashMap<DefId, HashMap<Place<'tcx>, HashMap<Place<'tcx>, Range<T>>>>;
+pub type RAVecResultMap<'tcx, T> =
+    FxHashMap<DefId, Vec<HashMap<Place<'tcx>, HashMap<Place<'tcx>, Range<T>>>>>;
 
 pub type PathConstraint<'tcx> = HashMap<Vec<usize>, Vec<(Place<'tcx>, Place<'tcx>, BinOp)>>;
 pub type PathConstraintMap<'tcx> =
@@ -55,9 +57,6 @@ pub trait RangeAnalysis<'tcx, T: IntervalArithmetic + ConstConvert + Debug>: Ana
     /// The function returns the range results for **every call instance** of every function in the crate.
     fn get_all_fn_ranges_percall(&self) -> RAVecResultMap<'tcx, T>;
 
-    /// The function returns the inferred range for a specific variable (Place) in a specific function.
-    fn get_fn_local_range(&self, def_id: DefId, local: Place<'tcx>) -> Option<Range<T>>;
-
     /// The function returns a mapping from feasible control-flow paths to symbolic constraints.
     /// Each constraint is a triple of (`Place`, `Place`, `BinOp`) representing
     /// path-sensitive relational information useful for pruning infeasible paths.
@@ -73,9 +72,13 @@ where
     T: IntervalArithmetic + Clone + PartialOrd + Display,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (place, range) in &self.0 {
-            writeln!(f, "{:?} => {}", place, range)?;
+        for (origin_place, range_set) in &self.0 {
+            writeln!(f, "    {:?} \n", origin_place)?;
+            for (place, range) in range_set {
+                writeln!(f, "    {:?} => {}", place, range)?;
+            }
         }
+
         Ok(())
     }
 }
@@ -94,8 +97,13 @@ where
             let mut sorted: Vec<_> = ra_result.iter().collect();
             sorted.sort_by_key(|(place, _)| place.local.as_usize());
 
-            for (place, range) in sorted {
-                writeln!(f, "  {:?} => {}", place, range)?;
+            for (place, range_map) in sorted {
+                writeln!(f, "  {:?} =>", place)?;
+                let mut inner_sorted: Vec<_> = range_map.iter().collect();
+                inner_sorted.sort_by_key(|(inner_place, _)| inner_place.local.as_usize());
+                for (inner_place, range) in inner_sorted {
+                    writeln!(f, "    {:?} => {}", inner_place, range)?;
+                }
             }
         }
         Ok(())
@@ -119,8 +127,11 @@ where
                 let mut sorted: Vec<_> = map.iter().collect();
                 sorted.sort_by_key(|(place, _)| place.local.as_usize());
 
-                for (place, range) in sorted {
-                    writeln!(f, "    {:?} => {}", place, range)?;
+                for (origin_place, range_set) in sorted {
+                    writeln!(f, "    {:?} \n", origin_place)?;
+                    for (place, range) in range_set {
+                        writeln!(f, "    {:?} => {}", place, range)?;
+                    }
                 }
             }
         }

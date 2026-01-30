@@ -71,7 +71,7 @@ pub struct ConstraintGraph<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     pub worklist: VecDeque<&'tcx Place<'tcx>>,
     pub numAloneSCCs: usize,
     pub numSCCs: usize, // Add a stub for pre_update to resolve the missing method error.
-    pub final_vars: VarNodes<'tcx, T>,
+    pub final_vars: HashMap<Place<'tcx>, HashMap<Place<'tcx>, Range<T>>>,
     pub arg_count: usize,
     pub rerurn_places: HashSet<&'tcx Place<'tcx>>,
     pub switchbbs: HashMap<BasicBlock, (Place<'tcx>, Place<'tcx>)>,
@@ -123,7 +123,7 @@ where
             worklist: VecDeque::new(),
             numAloneSCCs: 0,
             numSCCs: 0,
-            final_vars: VarNodes::new(),
+            final_vars: HashMap::new(),
             arg_count: 0,
             rerurn_places: HashSet::new(),
             switchbbs: HashMap::new(),
@@ -162,7 +162,7 @@ where
             worklist: VecDeque::new(),
             numAloneSCCs: 0,
             numSCCs: 0,
-            final_vars: VarNodes::new(),
+            final_vars: HashMap::new(),
             arg_count: 0,
             rerurn_places: HashSet::new(),
             switchbbs: HashMap::new(),
@@ -252,40 +252,36 @@ where
 
     pub fn build_final_vars(
         &mut self,
-        places_map: &HashMap<Place<'tcx>, HashSet<Place<'tcx>>>,
-    ) -> (VarNodes<'tcx, T>, Vec<Place<'tcx>>) {
-        let mut final_vars: VarNodes<'tcx, T> = HashMap::new();
-        let mut not_found: Vec<Place<'tcx>> = Vec::new();
-
-        for (&_key_place, place_set) in places_map {
+        ssa_places_mapping: &HashMap<Place<'tcx>, HashSet<Place<'tcx>>>,
+    ) -> (HashMap<Place<'tcx>, HashMap<Place<'tcx>, Range<T>>>) {
+        let mut final_vars = HashMap::new();
+        for (&_key_place, place_set) in ssa_places_mapping {
+            let mut tmp_varnodes = HashMap::new();
             for &place in place_set {
-                let found = self.vars.iter().find(|&(&p, _)| *p == place);
-
-                if let Some((&found_place, var_node)) = found {
-                    final_vars.insert(found_place, var_node.clone());
-                } else {
-                    not_found.push(place);
+                if let Some(var_node) = self.vars.get(&place) {
+                    tmp_varnodes.insert(place, var_node.get_range().clone());
                 }
             }
+            final_vars.insert(_key_place, tmp_varnodes);
         }
         self.final_vars = final_vars.clone();
-        (final_vars, not_found)
-    }
-    pub fn filter_final_vars(
-        vars: &VarNodes<'tcx, T>,
-        places_map: &HashMap<Place<'tcx>, HashSet<Place<'tcx>>>,
-    ) -> HashMap<Place<'tcx>, Range<T>> {
-        let mut final_vars = HashMap::new();
-
-        for (&_key_place, place_set) in places_map {
-            for &place in place_set {
-                if let Some(var_node) = vars.get(&place) {
-                    final_vars.insert(place, var_node.get_range().clone());
-                }
-            }
-        }
         final_vars
     }
+    // pub fn filter_final_vars(
+    //     vars: &VarNodes<'tcx, T>,
+    //     places_map: &HashMap<Place<'tcx>, HashSet<Place<'tcx>>>,
+    // ) -> HashMap<Place<'tcx>, Range<T>> {
+    //     let mut final_vars = HashMap::new();
+
+    //     for (&_key_place, place_set) in places_map {
+    //         for &place in place_set {
+    //             if let Some(var_node) = vars.get(&place) {
+    //                 final_vars.insert(place, var_node.get_range().clone());
+    //             }
+    //         }
+    //     }
+    //     final_vars
+    // }
     pub fn test_and_print_all_symbolic_expressions(&self) {
         rap_info!("\n==== Testing and Printing All Symbolic Expressions ====");
 
@@ -305,11 +301,7 @@ where
         }
         rap_info!("==== End of Symbolic Expression Test ====\n");
     }
-    pub fn rap_print_final_vars(&self) {
-        for (&key, value) in &self.final_vars {
-            rap_debug!("Var: {:?}, {:?} ", key, value.get_range());
-        }
-    }
+
     pub fn rap_print_vars(&self) {
         for (&key, value) in &self.vars {
             rap_trace!("Var: {:?}. {:?} ", key, value.get_range());

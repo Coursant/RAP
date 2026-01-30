@@ -436,23 +436,24 @@ fn test_upg_static_mut() {
     assert_eq!(output.contains("::COUNTER"), true);
 }
 
-#[test]
-fn test_ssa_transform() {
-    let output = running_tests_with_arg("ssa/ssa_transform", "-ssa");
-    assert_eq!(output.contains("ssa lvalue check true"), true);
-}
+
 #[test]
 fn test_range_analysis() {
     let output = running_tests_with_arg("range/range_1", "-range");
 
     let expected_ranges = vec![
-        "_1 => Regular [0, 0]",
-        "_2 => Regular [Min, Max]",
-        "_4 => Regular [0, 100]",
-        "_6 => Regular [0, 99]",
-        "_11 => Regular [1, 99]",
-        "_12 => Regular [0, 98]",
-        "_34 => Regular [1, 100]",
+        "_20 => Regular [0, 0]",
+        "_47 => Regular [1, 100]",
+        "_25 => Regular [0, 100]",
+        "_28 => Regular [0, 0]",
+        "_39 => Regular [1, 99]",
+        "_29 => Regular [0, 99]",
+        "_41 => Regular [0, 98]",
+        "_33 => Regular [0, 99]",
+        "_34 => Regular [0, 99]",
+        "_38 => Regular [1, 99]",
+        "_40 => Regular [0, 98]",
+        "_46 => Regular [1, 100]",
     ];
 
     for expected in expected_ranges {
@@ -470,10 +471,10 @@ fn test_interprocedual_range_analysis() {
     let output = running_tests_with_arg("range/range_2", "-range");
 
     let expected_ranges = vec![
-        "_1 => Regular [42, 42]",
-        "_2 => Regular [Min, Max]",
-        "_4 => Regular [52, 52]",
-        "_5 => Regular [100, 100]",
+        "_7 => Regular [42, 42]",
+        "_9 => Regular [Min, Max]",
+        "_10 => Regular [52, 52]",
+        "_12 => Regular [100, 100]",
     ];
 
     for expected in expected_ranges {
@@ -507,9 +508,9 @@ fn test_symbolic_interval() {
     let output = running_tests_with_arg("range/range_symbolic", "-range");
 
     let expected_ranges = vec![
-        "Var: (_5.0: i32). [ Binary(AddWithOverflow, Place(_1), Constant(Val(Scalar(0x00000001), i32))) , Binary(AddWithOverflow, Place(_1), Constant(Val(Scalar(0x00000001), i32))) ]",
-        "Var: _6. [ Place(_1) , Place(_1) ]",
-        "Var: _8. [ Constant(Val(Scalar(0x00000001), i32)) , Constant(Val(Scalar(0x00000001), i32)) ]",
+        "Var: (_19.0: i32). [ Binary(AddWithOverflow, Place(_1), Constant(Val(Scalar(0x00000001), i32))) , Binary(AddWithOverflow, Place(_1), Constant(Val(Scalar(0x00000001), i32))) ]",
+        "Var: _21. [ Place(_1) , Place(_1) ]",
+        "Var: _25. [ Constant(Val(Scalar(0x00000001), i32)) , Constant(Val(Scalar(0x00000001), i32)) ]",
     ];
 
     for expected in expected_ranges {

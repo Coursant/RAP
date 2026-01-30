@@ -27,6 +27,10 @@ impl<'tcx> Replacer<'tcx> {
         for bb in body.basic_blocks.indices() {
             phi_functions.insert(bb, HashSet::new());
         }
+        rap_trace!(
+            "local_assign_blocks: {:?}",
+            self.ssatransformer.local_assign_blocks
+        );
         let variables: Vec<Local> = self
             .ssatransformer
             .local_assign_blocks
@@ -34,6 +38,7 @@ impl<'tcx> Replacer<'tcx> {
             .filter(|(_, blocks)| blocks.len() >= 2)
             .map(|(&local, _)| local)
             .collect();
+        rap_trace!("variables needing phi functions: {:?}", variables);
         for var in &variables {
             if let Some(def_blocks) = self.ssatransformer.local_assign_blocks.get(var) {
                 let mut worklist: VecDeque<BasicBlock> = def_blocks.iter().cloned().collect();
@@ -50,20 +55,6 @@ impl<'tcx> Replacer<'tcx> {
                         }
                     }
                 }
-                // while let Some(block) = worklist.pop_front() {
-                //     if let Some(df_blocks) = self.ssatransformer.df.get(&block) {
-                //         for &df_block in df_blocks {
-                //             if !processed.contains(&df_block) {
-                //                 phi_functions.get_mut(&df_block).unwrap().insert(*var);
-                //                 processed.insert(df_block);
-                //                 if self.ssatransformer.local_assign_blocks[var].contains(&df_block)
-                //                 {
-                //                     worklist.push_back(df_block);
-                //                 }
-                //             }
-                //         }
-                //     }
-                // }
             }
         }
 
@@ -457,11 +448,17 @@ impl<'tcx> Replacer<'tcx> {
             self.ssatransformer.reaching_def.insert(local, None);
         }
         // self.ssatransformer.local_defination_block = Self::map_locals_to_definition_block(&self.body.borrow());
-
+        rap_trace!(
+            "local_defination_block: {:?}",
+            self.ssatransformer.local_defination_block
+        );
+        rap_trace!("dom_tree: {:?}", self.ssatransformer.dom_tree);
         let order = SSATransformer::depth_first_search_preorder(
             &self.ssatransformer.dom_tree,
             body.basic_blocks.indices().next().unwrap().clone(),
         );
+        rap_trace!("traversal: {:?}", order);
+
         for bb in order {
             self.process_basic_block(bb, body);
         }
@@ -522,14 +519,17 @@ impl<'tcx> Replacer<'tcx> {
                     if let StatementKind::Assign(box (_, rvalue)) = &mut statement.kind {
                         if let Rvalue::Aggregate(_, operands) = rvalue {
                             // The first operand (index 0) is the variable that needs to be renamed/replaced.
-                            let index = 0;
-                            if index < operands.len() {
-                                // Replace the operand with the correct SSA version for the current path.
-                                self.replace_operand(
-                                    &mut operands[FieldIdx::from_usize(index)],
-                                    &do_bb,
-                                );
-                            }
+                            let mut index = 0;
+                            // Replace the operand with the correct SSA version for the current path.
+                            self.replace_operand(
+                                &mut operands[FieldIdx::from_usize(index)],
+                                &do_bb,
+                            );
+                            index += 1;
+                            self.replace_operand(
+                                &mut operands[FieldIdx::from_usize(index)],
+                                &do_bb,
+                            );
                         }
                     }
                 }
@@ -578,13 +578,7 @@ impl<'tcx> Replacer<'tcx> {
             // let rc_stat = Rc::new(RefCell::new(statement));
             let is_phi = SSATransformer::is_phi_statement(&self.ssatransformer, statement);
             let is_essa = SSATransformer::is_essa_statement(&self.ssatransformer, statement);
-            rap_trace!(
-                "IS in statement at block {:?}: {:?}, is_phi: {}, is_essa: {}",
-                bb,
-                statement.clone(),
-                is_phi,
-                is_essa
-            );
+
             match &mut statement.kind {
                 StatementKind::Assign(box (place, rvalue)) => {
                     if !is_phi {
@@ -595,6 +589,7 @@ impl<'tcx> Replacer<'tcx> {
                                 rvalue.clone()
                             );
                             self.replace_rvalue(rvalue, &bb);
+
                             self.rename_local_def(place, &bb, true);
                         } else {
                             self.ssa_rename_local_def(place, &bb, true);
@@ -678,7 +673,7 @@ impl<'tcx> Replacer<'tcx> {
 
     fn replace_place(&mut self, place: &mut Place<'tcx>, bb: &BasicBlock) {
         // let old_local = place.local;
-        self.update_reachinf_def(&place.local, &bb);
+        self.update_reaching_def(&place.local, &bb);
 
         if let Some(Some(reaching_local)) = self.ssatransformer.reaching_def.get(&place.local) {
             let local = reaching_local.clone();
@@ -692,7 +687,7 @@ impl<'tcx> Replacer<'tcx> {
 
     fn ssa_rename_local_def(&mut self, place: &mut Place<'tcx>, bb: &BasicBlock, not_phi: bool) {
         // let old_local = place.as_local().as_mut().unwrap();
-        self.update_reachinf_def(&place.local, &bb);
+        self.update_reaching_def(&place.local, &bb);
         let Place {
             local: old_local,
             projection: _,
@@ -708,11 +703,6 @@ impl<'tcx> Replacer<'tcx> {
         self.new_locals_to_declare.insert(new_local, old_local);
 
         let _old_local = old_local.clone();
-        self.ssatransformer
-            .ssa_locals_map
-            .entry(old_place)
-            .or_insert_with(HashSet::new)
-            .insert(new_place);
 
         self.ssatransformer
             .local_defination_block
@@ -729,7 +719,17 @@ impl<'tcx> Replacer<'tcx> {
         self.ssatransformer
             .reaching_def
             .insert(_old_local.clone(), Some(new_local.clone()));
-
+        rap_trace!(
+            "Renamed local:{:?} to new_local:{:?} in bb:{:?}",
+            old_local,
+            new_local,
+            bb
+        );
+        self.ssatransformer
+            .places_map
+            .entry(old_place)
+            .or_insert_with(HashSet::new)
+            .insert(new_place);
         // self.reaching_def
         //     .entry(old_local)
         //     .or_default()
@@ -737,7 +737,7 @@ impl<'tcx> Replacer<'tcx> {
     }
     fn rename_local_def(&mut self, place: &mut Place<'tcx>, bb: &BasicBlock, not_phi: bool) {
         // let old_local = place.as_local().as_mut().unwrap();
-        self.update_reachinf_def(&place.local, &bb);
+        self.update_reaching_def(&place.local, &bb);
         let Place {
             local: old_local,
             projection: _,
@@ -747,18 +747,6 @@ impl<'tcx> Replacer<'tcx> {
             return;
         }
 
-        if self.ssatransformer.skipped.contains(&old_local.as_usize()) && not_phi {
-            self.ssatransformer.skipped.remove(&old_local.as_usize());
-            self.ssatransformer
-                .reaching_def
-                .insert(old_local, Some(old_local));
-            self.ssatransformer
-                .places_map
-                .entry(old_place)
-                .or_insert_with(HashSet::new)
-                .insert(old_place);
-            return;
-        }
         let new_local = Local::from_usize(self.ssatransformer.local_index);
         let mut new_place: Place<'_> = Place::from(new_local);
         self.new_locals_to_declare.insert(new_local, old_local);
@@ -794,7 +782,26 @@ impl<'tcx> Replacer<'tcx> {
         self.ssatransformer
             .reaching_def
             .insert(_old_local.clone(), Some(new_local.clone()));
+        rap_trace!(
+            "Renamed local:{:?} to new_local:{:?} in bb:{:?}",
+            old_local,
+            new_local,
+            bb
+        );
+        self.ssatransformer
+            .original_locals_map
+            .entry(old_place)
+            .or_insert_with(HashSet::new)
+            .insert(new_place);
+        // if self.ssatransformer.skipped.contains(&old_local.as_usize()) && not_phi {
+        //     self.ssatransformer.skipped.remove(&old_local.as_usize());
+        //     // self.ssatransformer
+        //     //     .reaching_def
+        //     //     .insert(old_local, Some(old_local));
+        //     //wtf
+        //     rap_trace!("Skipping renaming for local:{:?} in bb:{:?}", old_local, bb);
 
+        // }
         // self.reaching_def
         //     .entry(old_local)
         //     .or_default()
@@ -802,47 +809,140 @@ impl<'tcx> Replacer<'tcx> {
     }
 
     pub fn dominates_(&self, def_bb: &BasicBlock, bb: &BasicBlock) -> bool {
+        if def_bb == bb {
+            return true;
+        }
+
+        let mut stack = match self.ssatransformer.dom_tree.get(def_bb) {
+            Some(children) => children.clone(),
+            None => return false,
+        };
+
         let mut visited = HashSet::new();
 
-        let mut stack = self.ssatransformer.dom_tree.get(def_bb).unwrap().clone();
         while let Some(block) = stack.pop() {
-            if !visited.insert(block) {
-                continue;
-            }
-
             if block == *bb {
                 return true;
             }
 
-            if let Some(children) = self.ssatransformer.dom_tree.get(&block) {
-                stack.extend(children);
+            if visited.insert(block) {
+                if let Some(children) = self.ssatransformer.dom_tree.get(&block) {
+                    stack.extend(children);
+                }
             }
         }
 
         false
     }
-    fn update_reachinf_def(&mut self, local: &Local, bb: &BasicBlock) {
-        // if self.ssatransformer.reaching_def[local]!= None {
-        //     return;
-        // }
+    // fn update_reaching_def(&mut self, local: &Local, bb: &BasicBlock) {
+    //     // if self.ssatransformer.reaching_def[local]!= None {
+    //     //     return;
+    //     // }
+    //     let mut r = self.ssatransformer.reaching_def[local];
+    //     let mut dominate_bool = true;
+    //     if r != None {
+    //         let def_bb = self.ssatransformer.local_defination_block[&r.unwrap()];
+    //         dominate_bool = self.dominates_(&def_bb, bb);
+    //     }
+    //     rap_trace!(
+    //         "Update reaching def for local:{:?} reaching_def:{:?} in bb:{:?}",
+    //         local,
+    //         r,
+    //         bb
+    //     );
+    //     while !(r == None || dominate_bool) {
+    //         r = self.ssatransformer.reaching_def[&r.unwrap()];
+    //         if r != None {
+    //             let def_bb = self.ssatransformer.local_defination_block[&r.unwrap()];
+    //             dominate_bool = self.dominates_(&def_bb, bb);
+    //             // rap_trace!("def_bb:{:?} bb:{:?}", def_bb, bb);
+    //         }
+    //     }
+
+    //     if let Some(entry) = self.ssatransformer.reaching_def.get_mut(local) {
+    //         *entry = r.clone();
+    //     }
+    //     rap_trace!(
+    //         "afterr reaching def for local:{:?} reaching_def:{:?} in bb:{:?}",
+    //         local,
+    //         r,
+    //         bb
+    //     );
+    // }
+    // fn update_reaching_def(&mut self, local: &Local, bb: &BasicBlock) {
+    //     // if self.ssatransformer.reaching_def[local]!= None {
+    //     //     return;
+    //     // }
+    //     let mut r = self.ssatransformer.reaching_def[local];
+    //     let mut dominate_bool = true;
+    //     if r != None {
+    //         let def_bb = self.ssatransformer.local_defination_block[&r.unwrap()];
+    //     }
+    //     rap_trace!(
+    //         "Update reaching def for local:{:?} reaching_def:{:?} in bb:{:?}",
+    //         local,
+    //         r,
+    //         bb
+    //     );
+    //     while !(r == None || dominate_bool) {
+    //         r = self.ssatransformer.reaching_def[&r.unwrap()];
+    //         if r != None {
+    //             let def_bb = self.ssatransformer.local_defination_block[&r.unwrap()];
+
+    //             dominate_bool = self.dominates_(&def_bb, bb);
+    //             rap_trace!(
+    //                 "dominate_bool {:?} def_bb:{:?} bb:{:?}",
+    //                 dominate_bool,
+    //                 def_bb,
+    //                 bb
+    //             );
+    //         }
+    //     }
+
+    //     if let Some(entry) = self.ssatransformer.reaching_def.get_mut(local) {
+    //         *entry = r.clone();
+    //     }
+    //     rap_trace!(
+    //         "afterr reaching def for local:{:?} reaching_def:{:?} in bb:{:?}",
+    //         local,
+    //         r,
+    //         bb
+    //     );
+    // }
+    fn update_reaching_def(&mut self, local: &Local, bb: &BasicBlock) {
+        // 1. r ← v.reachingDef
         let mut r = self.ssatransformer.reaching_def[local];
-        let mut dominate_bool = true;
-        if r != None {
-            let def_bb = self.ssatransformer.local_defination_block[&r.unwrap()];
-        }
+        rap_trace!(
+            "Update reaching def for local:{:?} reaching_def:{:?} in bb:{:?}",
+            local,
+            r,
+            bb
+        );
+        // 2. while not (r == ⊥ or definition(r) dominates i)
+        while let Some(def_id) = r {
+            let def_bb = self.ssatransformer.local_defination_block[&def_id];
 
-        while !(r == None || dominate_bool) {
-            r = self.ssatransformer.reaching_def[&r.unwrap()];
-            if r != None {
-                let def_bb = self.ssatransformer.local_defination_block[&r.unwrap()];
-
-                dominate_bool = self.dominates_(&def_bb, bb);
+            if self.dominates_(&def_bb, bb) {
+                rap_trace!("def_bb:{:?} dominates bb:{:?}", def_bb, bb);
+                break;
+            } else {
+                rap_trace!("def_bb:{:?} does not dominate bb:{:?}", def_bb, bb);
             }
+
+            // 3. r ← r.reachingDef
+            r = self.ssatransformer.reaching_def[&def_id];
         }
 
+        // 4. v.reachingDef ← r
         if let Some(entry) = self.ssatransformer.reaching_def.get_mut(local) {
-            *entry = r.clone();
+            *entry = r;
         }
+        rap_trace!(
+            "afterr reaching def for local:{:?} reaching_def:{:?} in bb:{:?}",
+            local,
+            r,
+            bb
+        );
     }
 }
 

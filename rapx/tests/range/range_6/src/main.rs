@@ -11,7 +11,8 @@ pub fn main(){
         let mut val = slice[i]; 
         if val > 128 {
             val+=1;
-            // i *= 2;
+            i *= 2;
+            i+=2;
         } else {
             i *= 21;
         }
