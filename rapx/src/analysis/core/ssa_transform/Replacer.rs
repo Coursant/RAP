@@ -626,8 +626,20 @@ impl<'tcx> Replacer<'tcx> {
                 }
                 self.rename_local_def(destination, &bb, true);
             }
-            TerminatorKind::Assert { cond, .. } => {
+            TerminatorKind::Assert { cond, msg, .. } => {
                 self.replace_operand(cond, &bb);
+                match &mut **msg {
+                    AssertKind::BoundsCheck { len, index } => {
+                        self.replace_operand(len, &bb);
+                        self.replace_operand(index, &bb);
+                    }
+                    AssertKind::Overflow(_, a, b) => {
+                        self.replace_operand(a, &bb);
+                        self.replace_operand(b, &bb);
+                    }
+
+                    _ => {}
+                }
             }
             TerminatorKind::Drop { place, .. } => {
                 self.replace_place(place, &bb);
@@ -657,6 +669,9 @@ impl<'tcx> Replacer<'tcx> {
                     self.replace_operand(operand, &bb);
                 }
             }
+            Rvalue::Ref(_, _, place) => {
+                self.replace_place(place, &bb);
+            }
             _ => {}
         }
     }
@@ -672,16 +687,29 @@ impl<'tcx> Replacer<'tcx> {
     }
 
     fn replace_place(&mut self, place: &mut Place<'tcx>, bb: &BasicBlock) {
-        // let old_local = place.local;
         self.update_reaching_def(&place.local, &bb);
 
         if let Some(Some(reaching_local)) = self.ssatransformer.reaching_def.get(&place.local) {
-            let local = reaching_local.clone();
-            let mut new_place: Place<'_> = Place::from(local);
-            new_place.projection = place.projection;
+            place.local = *reaching_local;
+        }
 
-            *place = new_place;
-        } else {
+        let mut new_projections: Vec<PlaceElem<'tcx>> = place.projection.to_vec();
+        let mut projection_changed = false;
+
+        for elem in new_projections.iter_mut() {
+            if let ProjectionElem::Index(local) = elem {
+                self.update_reaching_def(local, bb);
+
+                if let Some(Some(new_index_local)) = self.ssatransformer.reaching_def.get(local) {
+                    *elem = ProjectionElem::Index(*new_index_local);
+                    projection_changed = true;
+                }
+            }
+        }
+
+        // -------------------------------------------------
+        if projection_changed {
+            place.projection = self.tcx.mk_place_elems(&new_projections);
         }
     }
 
@@ -698,8 +726,26 @@ impl<'tcx> Replacer<'tcx> {
         }
         let new_local = Local::from_usize(self.ssatransformer.local_index);
         self.ssatransformer.local_index += 1;
-        let new_place: Place<'_> = Place::from(new_local);
-        *place = new_place.clone();
+        place.local = new_local.clone();
+        let mut new_projections: Vec<PlaceElem<'tcx>> = place.projection.to_vec();
+        let mut projection_changed = false;
+
+        for elem in new_projections.iter_mut() {
+            if let ProjectionElem::Index(local) = elem {
+                self.update_reaching_def(local, bb);
+
+                if let Some(Some(new_index_local)) = self.ssatransformer.reaching_def.get(local) {
+                    *elem = ProjectionElem::Index(*new_index_local);
+                    projection_changed = true;
+                }
+            }
+        }
+
+        // -------------------------------------------------
+        if projection_changed {
+            place.projection = self.tcx.mk_place_elems(&new_projections);
+        }
+
         self.new_locals_to_declare.insert(new_local, old_local);
 
         let _old_local = old_local.clone();
@@ -729,7 +775,7 @@ impl<'tcx> Replacer<'tcx> {
             .places_map
             .entry(old_place)
             .or_insert_with(HashSet::new)
-            .insert(new_place);
+            .insert(*place);
         // self.reaching_def
         //     .entry(old_local)
         //     .or_default()
@@ -748,11 +794,26 @@ impl<'tcx> Replacer<'tcx> {
         }
 
         let new_local = Local::from_usize(self.ssatransformer.local_index);
-        let mut new_place: Place<'_> = Place::from(new_local);
         self.new_locals_to_declare.insert(new_local, old_local);
+        place.local = new_local.clone();
+        let mut new_projections: Vec<PlaceElem<'tcx>> = place.projection.to_vec();
+        let mut projection_changed = false;
 
-        new_place.projection = place.projection;
-        *place = new_place.clone();
+        for elem in new_projections.iter_mut() {
+            if let ProjectionElem::Index(local) = elem {
+                self.update_reaching_def(local, bb);
+
+                if let Some(Some(new_index_local)) = self.ssatransformer.reaching_def.get(local) {
+                    *elem = ProjectionElem::Index(*new_index_local);
+                    projection_changed = true;
+                }
+            }
+        }
+
+        // -------------------------------------------------
+        if projection_changed {
+            place.projection = self.tcx.mk_place_elems(&new_projections);
+        }
 
         //find the original local defination assign statement
         if old_local.as_u32() == 0 {
@@ -764,7 +825,7 @@ impl<'tcx> Replacer<'tcx> {
             .places_map
             .entry(old_place)
             .or_insert_with(HashSet::new)
-            .insert(new_place);
+            .insert(*place);
 
         let _old_local = old_local.clone();
         self.ssatransformer
@@ -792,7 +853,7 @@ impl<'tcx> Replacer<'tcx> {
             .original_locals_map
             .entry(old_place)
             .or_insert_with(HashSet::new)
-            .insert(new_place);
+            .insert(*place);
         // if self.ssatransformer.skipped.contains(&old_local.as_usize()) && not_phi {
         //     self.ssatransformer.skipped.remove(&old_local.as_usize());
         //     // self.ssatransformer

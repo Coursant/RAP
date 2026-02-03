@@ -3,7 +3,7 @@ pub fn main(){
     let pieces = [42; 8];
     let mut i = 0;
         let slice_index = 8;
-
+// assert_eq!(slice_index, 4);
     let slice = & pieces[1..slice_index];
         let len = slice.len();
 

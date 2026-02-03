@@ -21,7 +21,7 @@ use rustc_middle::mir::{
     BasicBlock, BinOp, BorrowKind, CastKind, Const, Local, LocalDecl, Operand, Place, Rvalue,
     Statement, StatementKind, Terminator, UnOp,
 };
-use rustc_middle::ty::ScalarInt;
+use rustc_middle::ty::{self, ScalarInt};
 use rustc_span::sym::no_default_passes;
 use std::cell::RefCell;
 use std::cmp::PartialEq;
@@ -33,6 +33,9 @@ use std::ops::{Add, Mul, Sub};
 use std::rc::Rc;
 pub trait ConstConvert: Sized {
     fn from_const(c: &Const) -> Option<Self>;
+    fn from_tyconst(c: &ty::Const<'_>) -> Option<Self> {
+        None
+    }
 }
 
 impl ConstConvert for u32 {
@@ -81,6 +84,7 @@ impl ConstConvert for i128 {
         }
     }
 }
+
 pub trait IntervalArithmetic:
     PartialOrd
     + Clone

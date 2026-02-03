@@ -71,6 +71,8 @@ while true; do
     echo "Running test: $test_name"
     echo "Directory: $selected_dir"
     echo "Command: cargo rapx -range=print_mir"
+    echo "Command: cargo rapx -dotmir"
+
     echo "========================================"
 
     (

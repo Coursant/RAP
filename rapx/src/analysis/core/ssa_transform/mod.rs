@@ -150,12 +150,15 @@ pub fn print_mir_graph<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, def_id: DefId
     let _ = file.write_all(dot_graph.as_bytes());
 }
 //for f in *.dot; do dot -Tpng "$f" -o "${f%.dot}.png"; done
-fn mir_to_dot<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> String {
+fn mir_to_dot<'tcx>(_tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> String {
     let mut dot = String::new();
     dot.push_str("digraph MIR {\n");
+    // Set the node shape to 'box' for better readability of text content
     dot.push_str("  node [shape=box];\n");
 
     for (bb, bb_data) in body.basic_blocks.iter_enumerated() {
+        // 1. Process Statements
+        // Filter out storage markers (StorageLive/Dead) to reduce noise
         let statements_str = bb_data
             .statements
             .iter()
@@ -165,20 +168,44 @@ fn mir_to_dot<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> String {
                     StatementKind::StorageLive(_) | StatementKind::StorageDead(_)
                 )
             })
-            .map(|stmt| format!("{:?}", stmt).replace('\n', " "))
+            .map(|stmt| {
+                // Format the statement and replace newlines with spaces to keep the DOT label valid
+                format!("{:?}", stmt).replace('\n', " ")
+            })
             .collect::<Vec<_>>()
-            .join("\\l");
+            .join("\\l"); // '\l' is a left-aligned newline in Graphviz labels
 
+        // 2. Process Terminator
+        // MODIFICATION: The specific arm ignoring `Assert` was removed.
+        // Now `Assert` falls into the default `_` arm and gets formatted like other terminators.
         let terminator_str = match &bb_data.terminator {
-            Some(term) => match term.kind {
-                TerminatorKind::Assert { .. } => String::new(),
-                _ => format!("{:?}", term.kind).replace("->", "-->"),
-            },
+            Some(term) => {
+                let raw_str = match &term.kind {
+                    TerminatorKind::Assert {
+                        cond,
+                        expected,
+                        msg,
+                        target,
+                        ..
+                    } => {
+                        format!("Assert({:?} == {})\\lMsg: {:?}", cond, expected, msg)
+                    }
+                    _ => format!("{:?}", term.kind),
+                };
+
+                raw_str
+                    .replace("->", "-->")
+                    .replace('"', "\\\"")
+                    .replace('\n', "\\l")
+            }
             None => "NoTerminator".to_string(),
         };
 
+        // Combine statements and terminator into one label
         let label = format!("{}\\l{}\\l", statements_str, terminator_str);
 
+        // 3. Create the Node
+        // Add the BasicBlock index and the constructed label to the graph
         dot.push_str(&format!(
             "  {} [label=\"{:?}:\\l{}\"];\n",
             bb.index(),
@@ -186,6 +213,8 @@ fn mir_to_dot<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> String {
             label
         ));
 
+        // 4. Create Edges
+        // Iterate over successors to draw arrows between blocks
         if let Some(terminator) = &bb_data.terminator {
             for successor in terminator.successors() {
                 dot.push_str(&format!("  {} -> {};\n", bb.index(), successor.index()));

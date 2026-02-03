@@ -1,0 +1,294 @@
+// WARNING: This output format is intended for human consumers only
+// and is subject to change without notice. Knock yourself out.
+// HINT: See also -Z dump-mir for MIR at specific points during compilation.
+fn two_slices_mut(_1: &mut [usize], _2: &mut [usize]) -> () {
+    debug x => _1;
+    debug y => _2;
+    let mut _0: ();
+    let mut _3: usize;
+    let mut _4: std::option::Option<usize>;
+    let mut _6: bool;
+    let mut _7: usize;
+    let mut _8: bool;
+    scope 1 {
+        debug ((iter: std::ops::Range<usize>).0: usize) => _11;
+        debug ((iter: std::ops::Range<usize>).1: usize) => _3;
+        let _5: usize;
+        scope 2 {
+            debug i => _5;
+        }
+        scope 4 (inlined iter::range::<impl Iterator for std::ops::Range<usize>>::next) {
+            scope 5 (inlined <std::ops::Range<usize> as iter::range::RangeIteratorImpl>::spec_next) {
+                let mut _9: bool;
+                let _10: usize;
+                let mut _11: usize;
+                scope 6 {
+                    scope 8 (inlined <usize as Step>::forward_unchecked) {
+                        scope 9 (inlined #[track_caller] core::num::<impl usize>::unchecked_add) {
+                            scope 10 (inlined core::ub_checks::check_language_ub) {
+                                scope 11 (inlined core::ub_checks::check_language_ub::runtime) {
+                                }
+                            }
+                        }
+                    }
+                }
+                scope 7 (inlined std::cmp::impls::<impl PartialOrd for usize>::lt) {
+                    let mut _12: usize;
+                }
+            }
+        }
+    }
+    scope 3 (inlined <std::ops::Range<usize> as IntoIterator>::into_iter) {
+    }
+
+    bb0: {
+        _3 = PtrMetadata(copy _1);
+        _11 = const 0_usize;
+        goto -> bb1;
+    }
+
+    bb1: {
+        StorageLive(_4);
+        StorageLive(_9);
+        StorageLive(_12);
+        _12 = copy _11;
+        _9 = Lt(move _12, copy _3);
+        StorageDead(_12);
+        switchInt(move _9) -> [0: bb5, otherwise: bb4];
+    }
+
+    bb2: {
+        (*_1)[_5] = Add(copy (*_1)[_5], const 1_usize);
+        _7 = PtrMetadata(copy _2);
+        _8 = Lt(copy _5, copy _7);
+        assert(move _8, "index out of bounds: the length is {} but the index is {}", move _7, copy _5) -> [success: bb3, unwind continue];
+    }
+
+    bb3: {
+        (*_2)[_5] = Add(copy (*_2)[_5], const 1_usize);
+        StorageDead(_4);
+        goto -> bb1;
+    }
+
+    bb4: {
+        _10 = copy _11;
+        _11 = AddUnchecked(copy _10, const 1_usize);
+        _4 = Option::<usize>::Some(copy _10);
+        StorageDead(_9);
+        _5 = copy ((_4 as Some).0: usize);
+        _6 = Lt(copy _5, copy _3);
+        assert(move _6, "index out of bounds: the length is {} but the index is {}", copy _3, copy _5) -> [success: bb2, unwind continue];
+    }
+
+    bb5: {
+        StorageDead(_9);
+        StorageDead(_4);
+        return;
+    }
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let mut _1: [usize; 10];
+    let _3: ();
+    let mut _4: &mut [usize];
+    let mut _5: &mut [usize; 10];
+    let mut _6: &mut [usize];
+    let mut _7: &mut [usize; 10];
+    let mut _8: &mut [usize; 10];
+    let mut _9: std::option::Option<usize>;
+    let mut _11: bool;
+    scope 1 {
+        debug x => _1;
+        let mut _2: [usize; 10];
+        scope 2 {
+            debug y => _2;
+            scope 3 {
+                debug slice_index => const 5_usize;
+                scope 4 {
+                    debug slice => _21;
+                    scope 5 {
+                        debug ((iter: std::ops::Range<usize>).0: usize) => _27;
+                        debug ((iter: std::ops::Range<usize>).1: usize) => const 4_usize;
+                        let _10: usize;
+                        scope 6 {
+                            debug i => _10;
+                        }
+                        scope 29 (inlined iter::range::<impl Iterator for std::ops::Range<usize>>::next) {
+                            scope 30 (inlined <std::ops::Range<usize> as iter::range::RangeIteratorImpl>::spec_next) {
+                                let mut _25: bool;
+                                let _26: usize;
+                                let mut _27: usize;
+                                scope 31 {
+                                    scope 33 (inlined <usize as Step>::forward_unchecked) {
+                                        scope 34 (inlined #[track_caller] core::num::<impl usize>::unchecked_add) {
+                                            scope 35 (inlined core::ub_checks::check_language_ub) {
+                                                scope 36 (inlined core::ub_checks::check_language_ub::runtime) {
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                scope 32 (inlined std::cmp::impls::<impl PartialOrd for usize>::lt) {
+                                    let mut _28: usize;
+                                }
+                            }
+                        }
+                    }
+                    scope 28 (inlined <std::ops::Range<usize> as IntoIterator>::into_iter) {
+                    }
+                }
+                scope 21 (inlined #[track_caller] array::<impl IndexMut<std::ops::Range<usize>> for [usize; 10]>::index_mut) {
+                    let mut _20: &mut [usize];
+                    scope 22 (inlined #[track_caller] core::slice::index::<impl IndexMut<std::ops::Range<usize>> for [usize]>::index_mut) {
+                        scope 23 (inlined #[track_caller] <std::ops::Range<usize> as SliceIndex<[usize]>>::index_mut) {
+                            let mut _21: *mut [usize];
+                            let mut _22: *mut [usize];
+                            scope 24 (inlined core::num::<impl usize>::checked_sub) {
+                            }
+                            scope 25 (inlined core::slice::index::get_offset_len_mut_noubcheck::<usize>) {
+                                let _23: *mut usize;
+                                scope 26 {
+                                    let _24: *mut usize;
+                                    scope 27 {
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            scope 7 (inlined #[track_caller] array::<impl IndexMut<std::ops::Range<usize>> for [usize; 10]>::index_mut) {
+                let mut _12: &mut [usize];
+                scope 8 (inlined #[track_caller] core::slice::index::<impl IndexMut<std::ops::Range<usize>> for [usize]>::index_mut) {
+                    scope 9 (inlined #[track_caller] <std::ops::Range<usize> as SliceIndex<[usize]>>::index_mut) {
+                        let mut _13: *mut [usize];
+                        let mut _14: *mut [usize];
+                        scope 10 (inlined core::num::<impl usize>::checked_sub) {
+                        }
+                        scope 11 (inlined core::slice::index::get_offset_len_mut_noubcheck::<usize>) {
+                            let _15: *mut usize;
+                            scope 12 {
+                                scope 13 {
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            scope 14 (inlined #[track_caller] array::<impl IndexMut<std::ops::Range<usize>> for [usize; 10]>::index_mut) {
+                let mut _16: &mut [usize];
+                scope 15 (inlined #[track_caller] core::slice::index::<impl IndexMut<std::ops::Range<usize>> for [usize]>::index_mut) {
+                    scope 16 (inlined #[track_caller] <std::ops::Range<usize> as SliceIndex<[usize]>>::index_mut) {
+                        let mut _17: *mut [usize];
+                        let mut _18: *mut [usize];
+                        scope 17 (inlined core::num::<impl usize>::checked_sub) {
+                        }
+                        scope 18 (inlined core::slice::index::get_offset_len_mut_noubcheck::<usize>) {
+                            let _19: *mut usize;
+                            scope 19 {
+                                scope 20 {
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    bb0: {
+        StorageLive(_1);
+        _1 = [const 0_usize; 10];
+        StorageLive(_2);
+        _2 = [const 0_usize; 10];
+        StorageLive(_5);
+        _5 = &mut _1;
+        StorageLive(_12);
+        _12 = copy _5 as &mut [usize] (PointerCoercion(Unsize, AsCast));
+        StorageLive(_13);
+        StorageLive(_14);
+        _14 = &raw mut (*_12);
+        _15 = copy _14 as *mut usize (PtrToPtr);
+        _13 = *mut [usize] from (copy _15, const 5_usize);
+        StorageDead(_14);
+        _4 = &mut (*_13);
+        StorageDead(_13);
+        StorageDead(_12);
+        StorageDead(_5);
+        StorageLive(_7);
+        _7 = &mut _2;
+        StorageLive(_16);
+        _16 = copy _7 as &mut [usize] (PointerCoercion(Unsize, AsCast));
+        StorageLive(_17);
+        StorageLive(_18);
+        _18 = &raw mut (*_16);
+        _19 = copy _18 as *mut usize (PtrToPtr);
+        _17 = *mut [usize] from (copy _19, const 10_usize);
+        StorageDead(_18);
+        _6 = &mut (*_17);
+        StorageDead(_17);
+        StorageDead(_16);
+        StorageDead(_7);
+        _3 = two_slices_mut(move _4, move _6) -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        StorageLive(_8);
+        _8 = &mut _1;
+        StorageLive(_20);
+        _20 = copy _8 as &mut [usize] (PointerCoercion(Unsize, AsCast));
+        StorageLive(_22);
+        _22 = &raw mut (*_20);
+        StorageLive(_23);
+        StorageLive(_24);
+        _23 = copy _22 as *mut usize (PtrToPtr);
+        _24 = Offset(copy _23, const 1_usize);
+        _21 = *mut [usize] from (copy _24, const 4_usize);
+        StorageDead(_24);
+        StorageDead(_23);
+        StorageDead(_22);
+        StorageDead(_20);
+        StorageDead(_8);
+        _27 = const 0_usize;
+        goto -> bb2;
+    }
+
+    bb2: {
+        StorageLive(_9);
+        StorageLive(_25);
+        StorageLive(_28);
+        _28 = copy _27;
+        _25 = Lt(move _28, const 4_usize);
+        StorageDead(_28);
+        switchInt(move _25) -> [0: bb5, otherwise: bb4];
+    }
+
+    bb3: {
+        (*_21)[_10] = Add(copy _10, const 1_usize);
+        StorageDead(_9);
+        goto -> bb2;
+    }
+
+    bb4: {
+        _26 = copy _27;
+        _27 = AddUnchecked(copy _26, const 1_usize);
+        _9 = Option::<usize>::Some(copy _26);
+        StorageDead(_25);
+        _10 = copy ((_9 as Some).0: usize);
+        _11 = Lt(copy _10, const 4_usize);
+        assert(move _11, "index out of bounds: the length is {} but the index is {}", const 4_usize, copy _10) -> [success: bb3, unwind continue];
+    }
+
+    bb5: {
+        StorageDead(_25);
+        StorageDead(_9);
+        StorageDead(_2);
+        StorageDead(_1);
+        return;
+    }
+}
+
+const main::{constant#0}: usize = const 10_usize;
+
+const main::{constant#1}: usize = const 10_usize;

@@ -22,6 +22,7 @@ use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_hir::{def, def_id::DefId};
 use rustc_index::IndexVec;
 use rustc_middle::mir::visit::{PlaceContext, Visitor};
+use rustc_middle::ty::Ty;
 use rustc_middle::{
     mir::*,
     ty::{self, ScalarInt, TyCtxt, print},
@@ -86,6 +87,9 @@ where
 {
     pub fn convert_const(c: &Const) -> Option<T> {
         T::from_const(c)
+    }
+    pub fn convert_const_tyconst(c: &ty::Const<'tcx>) -> Option<T> {
+        T::from_tyconst(c)
     }
     pub fn new(
         body: &'tcx Body<'tcx>,
@@ -721,10 +725,8 @@ where
         while visited.insert(current_block) {
             let data = &body.basic_blocks[current_block];
 
-            // 逆序扫描当前块
             for stmt in data.statements.iter().rev() {
                 if let StatementKind::Assign(box (lhs, rvalue)) = &stmt.kind {
-                    // 只要找到了对目标变量的赋值语句
                     if lhs.local == target_local {
                         rap_debug!(
                             "Tracing source for {:?} in block {:?} {:?}\n",
@@ -733,19 +735,14 @@ where
                             rvalue
                         );
                         return match rvalue {
-                            // 如果右值是 Operand (例如 _2 = _1 或 _2 = const 5)
-                            // 直接返回这个 Operand 的引用，不再往上追 _1 的来源
                             Rvalue::Use(op) => Some(op),
 
-                            // 如果右值是计算结果 (例如 _2 = Add(_3, _4))
-                            // 说明 _2 的来源就在这里，但它不是一个独立的 Operand 对象，返回 None
                             _ => None,
                         };
                     }
                 }
             }
 
-            // 当前块没找到，尝试回溯唯一的前驱块
             let preds = &body.basic_blocks.predecessors()[current_block];
             if preds.len() == 1 {
                 current_block = preds[0];
@@ -1181,6 +1178,9 @@ where
                 Rvalue::Use(operend) => {
                     self.add_use_op(sink, inst, rvalue, operend);
                 }
+                Rvalue::Repeat(operend, count) => {
+                    self.add_repeat_use_op(sink, inst, rvalue, count);
+                }
                 Rvalue::Ref(_, borrowkind, place) => {
                     self.add_ref_op(sink, inst, rvalue, place, *borrowkind);
                 }
@@ -1410,6 +1410,47 @@ where
                 };
             }
         }
+    }
+    fn add_repeat_use_op(
+        &mut self,
+        sink: &'tcx Place<'tcx>,
+        inst: &'tcx Statement<'tcx>,
+        rvalue: &'tcx Rvalue<'tcx>,
+        _count: &'tcx ty::Const<'tcx>,
+    ) {
+        rap_trace!("use_op{:?}\n", inst);
+        let mir_const = match _count.kind() {
+            ty::ConstKind::Value(valtree) => {
+                let const_val = self.tcx.valtree_to_const_val((valtree));
+
+                Const::Val(const_val, Ty::new_static_str(self.tcx))
+            }
+
+            _ => {
+                unimplemented!("Handle other const kinds or use ParamEnv to resolve");
+            }
+        };
+        let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
+        let mut source: Option<&'tcx Place<'tcx>> = None;
+        rap_trace!("add_array {:?}\n", inst);
+
+        let useop = UseOp::new(IntervalType::Basic(BI), sink, inst, None, Some(mir_const));
+        // Insert the operation in the graph.
+        let bop_index = self.oprs.len();
+
+        self.oprs.push(BasicOpKind::Use(useop));
+        // Insert this definition in defmap
+
+        self.defmap.insert(sink, bop_index);
+        let sink_node = self.def_add_varnode_sym(sink, rvalue);
+
+        if let Some(value) = Self::convert_const(&mir_const) {
+            sink_node.set_range(Range::new(value.clone(), value.clone(), RangeType::Regular));
+            rap_trace!("set_const {:?} value: {:?}\n", sink_node, value);
+            // rap_trace!("sinknoderange: {:?}\n", sink_node.get_range());
+        } else {
+            sink_node.set_range(Range::default(T::min_value()));
+        };
     }
     fn add_essa_op(
         &mut self,

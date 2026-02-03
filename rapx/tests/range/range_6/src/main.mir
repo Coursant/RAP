@@ -1,0 +1,135 @@
+// WARNING: This output format is intended for human consumers only
+// and is subject to change without notice. Knock yourself out.
+// HINT: See also -Z dump-mir for MIR at specific points during compilation.
+fn main() -> () {
+    let mut _0: ();
+    let _1: [i32; 8];
+    let mut _3: &[i32; 8];
+    let mut _4: bool;
+    let mut _5: usize;
+    let _7: usize;
+    let mut _8: bool;
+    let mut _9: bool;
+    let mut _10: i32;
+    scope 1 {
+        debug pieces => _1;
+        let mut _2: usize;
+        scope 2 {
+            debug i => _2;
+            scope 3 {
+                debug slice_index => const 8_usize;
+                scope 4 {
+                    debug slice => _12;
+                    scope 5 {
+                        debug len => const 7_usize;
+                        let mut _6: i32;
+                        scope 6 {
+                            debug val => _6;
+                        }
+                    }
+                }
+                scope 7 (inlined #[track_caller] array::<impl Index<std::ops::Range<usize>> for [i32; 8]>::index) {
+                    let _11: &[i32];
+                    scope 8 (inlined #[track_caller] core::slice::index::<impl Index<std::ops::Range<usize>> for [i32]>::index) {
+                        scope 9 (inlined #[track_caller] <std::ops::Range<usize> as SliceIndex<[i32]>>::index) {
+                            let _12: *const [i32];
+                            let mut _13: *const [i32];
+                            scope 10 (inlined core::num::<impl usize>::checked_sub) {
+                            }
+                            scope 11 (inlined core::slice::index::get_offset_len_noubcheck::<i32>) {
+                                let _14: *const i32;
+                                scope 12 {
+                                    let _15: *const i32;
+                                    scope 13 {
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    bb0: {
+        StorageLive(_1);
+        _1 = [const 42_i32; 8];
+        StorageLive(_2);
+        _2 = const 0_usize;
+        StorageLive(_3);
+        _3 = &_1;
+        StorageLive(_11);
+        _11 = copy _3 as &[i32] (PointerCoercion(Unsize, AsCast));
+        StorageLive(_13);
+        _13 = &raw const (*_11);
+        StorageLive(_14);
+        StorageLive(_15);
+        _14 = copy _13 as *const i32 (PtrToPtr);
+        _15 = Offset(copy _14, const 1_usize);
+        _12 = *const [i32] from (copy _15, const 7_usize);
+        StorageDead(_15);
+        StorageDead(_14);
+        StorageDead(_13);
+        StorageDead(_11);
+        StorageDead(_3);
+        goto -> bb1;
+    }
+
+    bb1: {
+        StorageLive(_4);
+        StorageLive(_5);
+        _5 = copy _2;
+        _4 = Lt(move _5, const 14_usize);
+        switchInt(move _4) -> [0: bb7, otherwise: bb2];
+    }
+
+    bb2: {
+        StorageDead(_5);
+        StorageLive(_6);
+        StorageLive(_7);
+        _7 = copy _2;
+        _8 = Lt(copy _7, const 7_usize);
+        assert(move _8, "index out of bounds: the length is {} but the index is {}", const 7_usize, copy _7) -> [success: bb3, unwind continue];
+    }
+
+    bb3: {
+        _6 = copy (*_12)[_7];
+        StorageDead(_7);
+        StorageLive(_9);
+        StorageLive(_10);
+        _10 = copy _6;
+        _9 = Gt(move _10, const 128_i32);
+        switchInt(move _9) -> [0: bb5, otherwise: bb4];
+    }
+
+    bb4: {
+        StorageDead(_10);
+        _6 = Add(copy _6, const 1_i32);
+        _2 = Mul(copy _2, const 2_usize);
+        _2 = Add(copy _2, const 2_usize);
+        goto -> bb6;
+    }
+
+    bb5: {
+        StorageDead(_10);
+        _2 = Mul(copy _2, const 21_usize);
+        goto -> bb6;
+    }
+
+    bb6: {
+        StorageDead(_9);
+        StorageDead(_6);
+        StorageDead(_4);
+        goto -> bb1;
+    }
+
+    bb7: {
+        StorageDead(_5);
+        StorageDead(_4);
+        StorageDead(_2);
+        StorageDead(_1);
+        return;
+    }
+}
+
+const main::{constant#0}: usize = const 8_usize;

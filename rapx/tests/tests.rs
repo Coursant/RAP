@@ -436,7 +436,6 @@ fn test_upg_static_mut() {
     assert_eq!(output.contains("::COUNTER"), true);
 }
 
-
 #[test]
 fn test_range_analysis() {
     let output = running_tests_with_arg("range/range_1", "-range");
