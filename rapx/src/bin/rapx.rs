@@ -35,8 +35,8 @@ fn main() {
             continue;
         }
         match arg.as_str() {
-            "-alias" | "-alias0" | "-alias1" | "-alias2" => compiler.enable_alias(arg),
-            "-alias-mfp" => compiler.enable_alias_mfp(),
+            "-alias" => compiler.enable_alias(1),
+            "-alias-mfp" => compiler.enable_alias(2),
             "-adg" => compiler.enable_api_dependency(), // api dependency graph
             "-callgraph" => compiler.enable_callgraph(),
             "-dataflow" => compiler.enable_dataflow(1),
@@ -45,8 +45,7 @@ fn main() {
             "-range" => compiler.enable_range_analysis(1),
             "-range=print_mir" => compiler.enable_range_analysis(2),
             "-pathcond" => compiler.enable_range_analysis(3),
-            "-test" => compiler.enable_test(),
-            "-F" | "-F0" | "-F1" | "-F2" | "-uaf" => compiler.enable_safedrop(arg),
+            "-F" | "-uaf" => compiler.enable_safedrop(),
             "-I" | "-infer" => compiler.enable_infer(),
             "-M" | "-mleak" => compiler.enable_rcanary(),
             "-V" | "-verify" => compiler.enable_verify(),

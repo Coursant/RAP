@@ -48,7 +48,6 @@ use analysis::{
     rcanary::rCanary,
     safedrop::SafeDrop,
     senryx::{CheckLevel, SenryxCheck},
-    test::Test,
     upg::{TargetCrate, UPGAnalysis},
     utils::show_mir::ShowMir,
 };
@@ -61,7 +60,7 @@ use rustc_interface::{
 use rustc_middle::{ty::TyCtxt, util::Providers};
 use rustc_session::search_paths::PathKind;
 use std::path::PathBuf;
-use std::{env, sync::Arc};
+use std::sync::Arc;
 
 // Insert rustc arguments at the beginning of the argument list that RAP wants to be
 // set per default, for maximal validation power.
@@ -77,15 +76,13 @@ pub static RAP_DEFAULT_ARGS: &[&str] = &[
 
 #[derive(Debug, Clone, Hash)]
 pub struct RapCallback {
-    alias: bool,
-    alias_mfp: bool,
+    alias: usize,
     api_dependency: bool,
     callgraph: bool,
     dataflow: usize,
     ownedheap: bool,
     range: usize,
     ssa: bool,
-    test: bool,
     infer: bool,
     opt: usize,
     rcanary: bool,
@@ -103,15 +100,13 @@ pub struct RapCallback {
 impl Default for RapCallback {
     fn default() -> Self {
         Self {
-            alias: false,
-            alias_mfp: false,
+            alias: 0,
             api_dependency: false,
             callgraph: false,
             dataflow: 0,
             ownedheap: false,
             range: 0,
             ssa: false,
-            test: false,
             infer: false,
             opt: usize::MAX,
             rcanary: false,
@@ -192,42 +187,13 @@ impl RapCallback {
         }
     }
 
-    /// Enable alias analysis. The parameter is used to config the threshold of alias analysis.
-    /// Currently, we mainly use it to control the depth of field-sensitive analysis.
-    /// -alias0: set field depth limit to 10; do not distinguish different flows within a each
-    /// strongly-connected component.
-    /// -alias1: set field depth limit to 20 (this is default setting).
-    /// -alias2: set field depth limit to 30.
-    pub fn enable_alias(&mut self, arg: String) {
-        self.alias = true;
-        match arg.as_str() {
-            "-alias" => unsafe {
-                env::set_var("ALIAS", "1");
-            },
-            "-alias0" => unsafe {
-                env::set_var("ALIAS", "0");
-            },
-            "-alias1" => unsafe {
-                env::set_var("ALIAS", "1");
-            },
-            "-alias2" => unsafe {
-                env::set_var("ALIAS", "2");
-            },
-            _ => {}
-        }
+    /// Enable alias analysis.
+    pub fn enable_alias(&mut self, x: usize) {
+        self.alias = x;
     }
 
-    /// Test if alias analysis is enabled.
-    pub fn is_alias_enabled(&self) -> bool {
+    pub fn is_alias_enabled(&self) -> usize {
         self.alias
-    }
-
-    pub fn enable_alias_mfp(&mut self) {
-        self.alias_mfp = true;
-    }
-
-    pub fn is_alias_mfp_enabled(&self) -> bool {
-        self.alias_mfp
     }
 
     /// Enable API-dependency graph generation.
@@ -280,16 +246,6 @@ impl RapCallback {
         self.range > 0
     }
 
-    /// Enable test of features provided by the core analysis traits.
-    pub fn enable_test(&mut self) {
-        self.test = true;
-    }
-
-    /// Check if test is enabled.
-    pub fn is_test_enabled(&self) -> bool {
-        self.test
-    }
-
     /// Enable ssa transformation
     pub fn enable_ssa_transform(&mut self) {
         self.ssa = true;
@@ -321,53 +277,9 @@ impl RapCallback {
     }
 
     /// Enable safedrop for use-after-free bug detection.
-    /// Similar to alias analysis, the second parameter is to control the depth threshold for
     /// field-sensitive analysis.
-    pub fn enable_safedrop(&mut self, arg: String) {
+    pub fn enable_safedrop(&mut self) {
         self.safedrop = true;
-        match arg.as_str() {
-            "-F" => {
-                unsafe {
-                    env::set_var("SAFEDROP", "1");
-                }
-                unsafe {
-                    env::set_var("MOP", "1");
-                }
-            }
-            "-F0" => {
-                unsafe {
-                    env::set_var("SAFEDROP", "0");
-                }
-                unsafe {
-                    env::set_var("MOP", "0");
-                }
-            }
-            "-F1" => {
-                unsafe {
-                    env::set_var("SAFEDROP", "1");
-                }
-                unsafe {
-                    env::set_var("MOP", "1");
-                }
-            }
-            "-F2" => {
-                unsafe {
-                    env::set_var("SAFEDROP", "2");
-                }
-                unsafe {
-                    env::set_var("MOP", "2");
-                }
-            }
-            "-uaf" => {
-                unsafe {
-                    env::set_var("SAFEDROP", "1");
-                }
-                unsafe {
-                    env::set_var("MOP", "1");
-                }
-            }
-            _ => {}
-        }
     }
 
     /// Test if safedrop is enabled.
@@ -440,18 +352,20 @@ impl RapCallback {
 
 /// Start the analysis with the features enabled.
 pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
-    if callback.is_alias_enabled() {
-        let mut analyzer = AliasAnalyzer::new(tcx);
-        analyzer.run();
-        let alias = analyzer.get_local_fn_alias();
-        rap_info!("{}", FnAliasMapWrapper(alias));
-    }
-
-    if callback.is_alias_mfp_enabled() {
-        let mut analyzer = MfpAliasAnalyzer::new(tcx);
-        analyzer.run();
-        let alias = analyzer.get_local_fn_alias();
-        rap_info!("{}", FnAliasMapWrapper(alias));
+    match callback.is_alias_enabled() {
+        1 => {
+            let mut analyzer = AliasAnalyzer::new(tcx);
+            analyzer.run();
+            let alias = analyzer.get_local_fn_alias();
+            rap_info!("{}", FnAliasMapWrapper(alias));
+        }
+        2 => {
+            let mut analyzer = MfpAliasAnalyzer::new(tcx);
+            analyzer.run();
+            let alias = analyzer.get_local_fn_alias();
+            rap_info!("{}", FnAliasMapWrapper(alias));
+        }
+        _ => {}
     }
 
     if callback.is_api_dependency_enabled() {
@@ -525,11 +439,6 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
             }
             _ => {}
         }
-    }
-
-    if callback.is_test_enabled() {
-        let test = Test::new(tcx);
-        test.start();
     }
 
     match callback.is_opt_enabled() {
