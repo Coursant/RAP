@@ -5,7 +5,9 @@
 #[macro_use]
 pub mod utils;
 pub mod analysis;
+pub mod cli;
 pub mod def_id;
+pub mod help;
 pub mod preprocess;
 extern crate intervals;
 extern crate rustc_abi;
@@ -28,7 +30,10 @@ extern crate rustc_trait_selection;
 extern crate rustc_traits;
 extern crate rustc_type_ir;
 extern crate thin_vec;
-use crate::analysis::{core::alias_analysis::mfp::MfpAliasAnalyzer, scan::ScanAnalysis};
+use crate::{
+    analysis::{core::alias_analysis::mfp::MfpAliasAnalyzer, scan::ScanAnalysis},
+    cli::{AliasStrategyKind, AnalysisKind, Commands, OptLevel, RapxArgs},
+};
 use analysis::{
     Analysis,
     core::{
@@ -53,17 +58,12 @@ use analysis::{
 };
 use rustc_ast::ast;
 use rustc_driver::{Callbacks, Compilation};
-use rustc_interface::{
-    Config,
-    interface::{self, Compiler},
-};
+use rustc_interface::interface::{self, Compiler};
 use rustc_middle::{ty::TyCtxt, util::Providers};
 use rustc_session::search_paths::PathKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-// Insert rustc arguments at the beginning of the argument list that RAP wants to be
-// set per default, for maximal validation power.
 pub static RAP_DEFAULT_ARGS: &[&str] = &[
     "-Zalways-encode-mir",
     "-Zmir-opt-level=0",
@@ -74,56 +74,31 @@ pub static RAP_DEFAULT_ARGS: &[&str] = &[
 
 /// This is the data structure to handle rapx options as a rustc callback.
 
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone)]
 pub struct RapCallback {
-    alias: usize,
-    api_dependency: bool,
-    callgraph: bool,
-    dataflow: usize,
-    ownedheap: bool,
-    range: usize,
-    ssa: bool,
-    infer: bool,
-    opt: usize,
-    rcanary: bool,
-    safedrop: bool,
-    show_mir: bool,
-    show_mir_dot: bool,
-    upg: usize,
-    verify: bool,
-    verify_std: bool,
-    scan: bool,
-    test_crate: Option<String>,
+    args: RapxArgs,
 }
 
-#[allow(clippy::derivable_impls)]
-impl Default for RapCallback {
-    fn default() -> Self {
-        Self {
-            alias: 0,
-            api_dependency: false,
-            callgraph: false,
-            dataflow: 0,
-            ownedheap: false,
-            range: 0,
-            ssa: false,
-            infer: false,
-            opt: usize::MAX,
-            rcanary: false,
-            safedrop: false,
-            show_mir: false,
-            show_mir_dot: false,
-            upg: 0,
-            verify: false,
-            verify_std: false,
-            scan: false,
-            test_crate: None,
+impl RapCallback {
+    pub fn new(args: RapxArgs) -> Self {
+        Self { args }
+    }
+
+    fn is_building_test_crate(&self) -> bool {
+        match &self.args.test_crate {
+            None => true,
+            Some(test_crate) => {
+                let test_crate: &str = test_crate;
+                let package_name = std::env::var("CARGO_PKG_NAME")
+                    .expect("cannot capture env var `CARGO_PKG_NAME`");
+                package_name == test_crate
+            }
         }
     }
 }
 
 impl Callbacks for RapCallback {
-    fn config(&mut self, config: &mut Config) {
+    fn config(&mut self, config: &mut rustc_interface::Config) {
         config.override_queries = Some(|_, providers| {
             providers.extern_queries.used_crate_source = |tcx, cnum| {
                 let mut providers = Providers::default();
@@ -174,330 +149,137 @@ impl Callbacks for RapCallback {
     }
 }
 
-impl RapCallback {
-    fn is_building_test_crate(&self) -> bool {
-        match &self.test_crate {
-            None => true,
-            Some(test_crate) => {
-                let test_crate: &str = test_crate;
-                let package_name = std::env::var("CARGO_PKG_NAME")
-                    .expect("cannot capture env var `CARGO_PKG_NAME`");
-                package_name == test_crate
-            }
-        }
-    }
-
-    /// Enable alias analysis.
-    pub fn enable_alias(&mut self, x: usize) {
-        self.alias = x;
-    }
-
-    pub fn is_alias_enabled(&self) -> usize {
-        self.alias
-    }
-
-    /// Enable API-dependency graph generation.
-    pub fn enable_api_dependency(&mut self) {
-        self.api_dependency = true;
-    }
-
-    /// Test if API-dependency graph generation is enabled.
-    pub fn is_api_dependency_enabled(&self) -> bool {
-        self.api_dependency
-    }
-
-    /// Enable call-graph analysis.
-    pub fn enable_callgraph(&mut self) {
-        self.callgraph = true;
-    }
-
-    /// Test if call-graph analysis is enabled.
-    pub fn is_callgraph_enabled(&self) -> bool {
-        self.callgraph
-    }
-
-    /// Enable owned heap analysis.
-    pub fn enable_ownedheap(&mut self) {
-        self.ownedheap = true;
-    }
-
-    /// Test if owned-heap analysis is enabled.
-    pub fn is_ownedheap_enabled(&self) -> bool {
-        self.ownedheap
-    }
-
-    /// Enable dataflow analysis.
-    pub fn enable_dataflow(&mut self, x: usize) {
-        self.dataflow = x;
-    }
-
-    /// Test if dataflow analysis is enabled.
-    pub fn is_dataflow_enabled(&self) -> usize {
-        self.dataflow
-    }
-
-    /// Enable range analysis.
-    pub fn enable_range_analysis(&mut self, x: usize) {
-        self.range = x;
-    }
-
-    /// Test if range analysis is enabled.
-    pub fn is_range_analysis_enabled(&self) -> bool {
-        self.range > 0
-    }
-
-    /// Enable ssa transformation
-    pub fn enable_ssa_transform(&mut self) {
-        self.ssa = true;
-    }
-
-    /// Test if ssa transformation is enabled.
-    pub fn is_ssa_transform_enabled(&self) -> bool {
-        self.ssa
-    }
-
-    /// Enable optimization analysis for performance bug detection.
-    pub fn enable_opt(&mut self, x: usize) {
-        self.opt = x;
-    }
-
-    /// Test if optimization analysis is enabled.
-    pub fn is_opt_enabled(&self) -> usize {
-        self.opt
-    }
-
-    /// Enable rcanary for memory leakage detection.
-    pub fn enable_rcanary(&mut self) {
-        self.rcanary = true;
-    }
-
-    /// Test if rcanary is enabled.
-    pub fn is_rcanary_enabled(&self) -> bool {
-        self.rcanary
-    }
-
-    /// Enable safedrop for use-after-free bug detection.
-    /// field-sensitive analysis.
-    pub fn enable_safedrop(&mut self) {
-        self.safedrop = true;
-    }
-
-    /// Test if safedrop is enabled.
-    pub fn is_safedrop_enabled(&self) -> bool {
-        self.safedrop
-    }
-
-    /// Enable mir display.
-    pub fn enable_show_mir(&mut self) {
-        self.show_mir = true;
-    }
-
-    /// Test if mir display is enabled.
-    pub fn is_show_mir_enabled(&self) -> bool {
-        self.show_mir
-    }
-
-    pub fn enable_show_mir_dot(&mut self) {
-        self.show_mir_dot = true;
-    }
-
-    pub fn is_show_mir_dot_enabled(&self) -> bool {
-        self.show_mir_dot
-    }
-
-    pub fn enable_upg(&mut self, x: usize) {
-        self.upg = x;
-    }
-
-    pub fn is_upg_enabled(&self) -> usize {
-        self.upg
-    }
-
-    pub fn enable_verify(&mut self) {
-        self.verify = true;
-    }
-
-    pub fn is_verify_enabled(&self) -> bool {
-        self.verify
-    }
-
-    pub fn enable_verify_std(&mut self) {
-        self.verify_std = true;
-    }
-
-    pub fn is_verify_std_enabled(&self) -> bool {
-        self.verify_std
-    }
-
-    pub fn enable_infer(&mut self) {
-        self.infer = true;
-    }
-
-    pub fn is_infer_enabled(&self) -> bool {
-        self.infer
-    }
-
-    pub fn enable_scan(&mut self) {
-        self.scan = true;
-    }
-
-    pub fn is_scan_enabled(&self) -> bool {
-        self.scan
-    }
-
-    pub fn set_test_crate(&mut self, crate_name: impl ToString) {
-        self.test_crate = Some(crate_name.to_string())
-    }
-}
-
 /// Start the analysis with the features enabled.
 pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
-    match callback.is_alias_enabled() {
-        1 => {
-            let mut analyzer = AliasAnalyzer::new(tcx);
-            analyzer.run();
-            let alias = analyzer.get_local_fn_alias();
-            rap_info!("{}", FnAliasMapWrapper(alias));
-        }
-        2 => {
-            let mut analyzer = MfpAliasAnalyzer::new(tcx);
-            analyzer.run();
-            let alias = analyzer.get_local_fn_alias();
-            rap_info!("{}", FnAliasMapWrapper(alias));
-        }
-        _ => {}
-    }
-
-    if callback.is_api_dependency_enabled() {
-        let mut analyzer = ApiDependencyAnalyzer::new(
-            tcx,
-            analysis::core::api_dependency::Config {
-                pub_only: true,
-                resolve_generic: true,
-                ignore_const_generic: true,
-            },
-        );
-        analyzer.run();
-    }
-
-    if callback.is_callgraph_enabled() {
-        let mut analyzer = CallGraphAnalyzer::new(tcx);
-        analyzer.run();
-        let callgraph = analyzer.get_fn_calls();
-        rap_info!(
-            "{}",
-            FnCallDisplay {
-                fn_calls: &callgraph,
-                tcx
+    match &callback.args.command {
+        &Commands::Check {
+            uaf,
+            mleak,
+            opt,
+            infer,
+            verify,
+            verify_std,
+        } => {
+            if uaf.is_some() {
+                SafeDrop::new(tcx).start();
             }
-        );
-        //analyzer.display();
-    }
+            if mleak {
+                let mut heap = OwnedHeapAnalyzer::new(tcx);
+                heap.run();
+                let adt_owner = heap.get_all_items();
+                rCanary::new(tcx, adt_owner).start();
+            }
+            if let Some(opt_level) = opt {
+                match opt_level {
+                    OptLevel::Report => Opt::new(tcx, 0).start(),
+                    OptLevel::Default => Opt::new(tcx, 1).start(),
+                    OptLevel::All => Opt::new(tcx, 2).start(),
+                }
+            }
+            if infer {
+                let check_level = CheckLevel::Medium;
+                SenryxCheck::new(tcx, 2).start(check_level, false);
+            }
+            if verify {
+                let check_level = CheckLevel::Medium;
+                SenryxCheck::new(tcx, 2).start(check_level, true);
+            }
 
-    match callback.is_dataflow_enabled() {
-        1 => {
-            let mut analyzer = DataFlowAnalyzer::new(tcx, false);
-            analyzer.run();
-            let result = analyzer.get_all_arg2ret();
-            rap_info!("{}", Arg2RetMapWrapper(result));
+            if verify_std {
+                SenryxCheck::new(tcx, 2).start_analyze_std_func();
+                // SenryxCheck::new(tcx, 2).generate_uig_by_def_id();
+            }
         }
-        2 => {
-            let mut analyzer = DataFlowAnalyzer::new(tcx, true);
-            analyzer.run();
-            let result = analyzer.get_all_dataflow();
-            rap_info!("{}", DataFlowGraphMapWrapper(result));
-        }
-        _ => {}
-    }
 
-    if callback.is_ownedheap_enabled() {
-        let mut analyzer = OwnedHeapAnalyzer::new(tcx);
-        analyzer.run();
-        let result = analyzer.get_all_items();
-        rap_info!("{}", OHAResultMapWrapper(result));
-    }
-
-    if callback.is_range_analysis_enabled() {
-        match callback.range {
-            1 => {
-                let mut analyzer = RangeAnalyzer::<i64>::new(tcx, false);
+        &Commands::Analyze { kind } => match kind {
+            AnalysisKind::Alias { strategy } => {
+                let alias = match strategy {
+                    AliasStrategyKind::Mop => {
+                        let mut analyzer = AliasAnalyzer::new(tcx);
+                        analyzer.run();
+                        analyzer.get_local_fn_alias()
+                    }
+                    AliasStrategyKind::Mfp => {
+                        let mut analyzer = MfpAliasAnalyzer::new(tcx);
+                        analyzer.run();
+                        analyzer.get_local_fn_alias()
+                    }
+                };
+                rap_info!("{}", FnAliasMapWrapper(alias));
+            }
+            AnalysisKind::Adg => {
+                let mut analyzer = ApiDependencyAnalyzer::new(
+                    tcx,
+                    analysis::core::api_dependency::Config {
+                        pub_only: true,
+                        resolve_generic: true,
+                        ignore_const_generic: true,
+                    },
+                );
                 analyzer.run();
-                let result = analyzer.get_all_fn_ranges();
-                rap_info!("{}", RAResultMapWrapper(result));
             }
-            2 => {
-                let mut analyzer = RangeAnalyzer::<i64>::new(tcx, true);
+            AnalysisKind::Upg => {
+                UPGAnalysis::new(tcx).start(TargetCrate::Other);
+            }
+            AnalysisKind::UpgStd => {
+                UPGAnalysis::new(tcx).start(TargetCrate::Std);
+            }
+            AnalysisKind::Callgraph => {
+                let mut analyzer = CallGraphAnalyzer::new(tcx);
                 analyzer.run();
-                let result = analyzer.get_all_fn_ranges();
-                rap_info!("{}", RAResultMapWrapper(result));
+                let callgraph = analyzer.get_fn_calls();
+                rap_info!(
+                    "{}",
+                    FnCallDisplay {
+                        fn_calls: &callgraph,
+                        tcx
+                    }
+                );
             }
-            3 => {
+            AnalysisKind::Dataflow { debug } => {
+                if debug {
+                    let mut analyzer = DataFlowAnalyzer::new(tcx, true);
+                    analyzer.run();
+                    let result = analyzer.get_all_dataflow();
+                    rap_info!("{}", DataFlowGraphMapWrapper(result));
+                } else {
+                    let mut analyzer = DataFlowAnalyzer::new(tcx, false);
+                    analyzer.run();
+                    let result = analyzer.get_all_arg2ret();
+                    rap_info!("{}", Arg2RetMapWrapper(result));
+                }
+            }
+            AnalysisKind::OwnedHeap => {
+                let mut analyzer = OwnedHeapAnalyzer::new(tcx);
+                analyzer.run();
+                let result = analyzer.get_all_items();
+                rap_info!("{}", OHAResultMapWrapper(result));
+            }
+            AnalysisKind::Pathcond => {
                 let mut analyzer = RangeAnalyzer::<i64>::new(tcx, false);
                 analyzer.start_path_constraints_analysis();
                 let result = analyzer.get_all_path_constraints();
                 rap_info!("{}", PathConstraintMapWrapper(result));
             }
-            _ => {}
-        }
-    }
+            AnalysisKind::Range { debug } => {
+                let mut analyzer = RangeAnalyzer::<i64>::new(tcx, debug);
+                analyzer.run();
+                let result = analyzer.get_all_fn_ranges();
+                rap_info!("{}", RAResultMapWrapper(result));
+            }
 
-    match callback.is_opt_enabled() {
-        0 => Opt::new(tcx, 0).start(),
-        1 => Opt::new(tcx, 1).start(),
-        2 => Opt::new(tcx, 2).start(),
-        _ => {}
-    }
-
-    let _rcanary: Option<rCanary> = if callback.is_rcanary_enabled() {
-        let mut heap = OwnedHeapAnalyzer::new(tcx);
-        heap.run();
-        let adt_owner = heap.get_all_items();
-        let mut rcx = rCanary::new(tcx, adt_owner);
-        rcx.start();
-        Some(rcx)
-    } else {
-        None
-    };
-
-    if callback.is_safedrop_enabled() {
-        SafeDrop::new(tcx).start();
-    }
-
-    if callback.is_show_mir_enabled() {
-        ShowMir::new(tcx).start();
-    }
-
-    if callback.is_show_mir_dot_enabled() {
-        ShowMir::new(tcx).start_generate_dot();
-    }
-
-    if callback.is_ssa_transform_enabled() {
-        SSATrans::new(tcx, false).start();
-    }
-
-    let x = callback.is_upg_enabled();
-    match x {
-        1 => UPGAnalysis::new(tcx).start(TargetCrate::Other),
-        2 => UPGAnalysis::new(tcx).start(TargetCrate::Std),
-        _ => {}
-    }
-
-    if callback.is_verify_enabled() {
-        let check_level = CheckLevel::Medium;
-        SenryxCheck::new(tcx, 2).start(check_level, true);
-    }
-
-    if callback.is_verify_std_enabled() {
-        SenryxCheck::new(tcx, 2).start_analyze_std_func();
-        // SenryxCheck::new(tcx, 2).generate_uig_by_def_id();
-    }
-
-    if callback.is_infer_enabled() {
-        let check_level = CheckLevel::Medium;
-        SenryxCheck::new(tcx, 2).start(check_level, false);
-    }
-
-    if callback.is_scan_enabled() {
-        ScanAnalysis::new(tcx).run();
+            AnalysisKind::Scan => {
+                ScanAnalysis::new(tcx).run();
+            }
+            AnalysisKind::Mir => {
+                ShowMir::new(tcx).start();
+            }
+            AnalysisKind::DotMir => {
+                ShowMir::new(tcx).start_generate_dot();
+            }
+            AnalysisKind::Ssa => {
+                SSATrans::new(tcx, false).start();
+            }
+        },
     }
 }

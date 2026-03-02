@@ -203,7 +203,7 @@ impl<'tcx> MopGraph<'tcx> {
     pub fn sync_field_alias(&mut self, lv: usize, rv: usize, depth: usize, clear_left: bool) {
         rap_debug!("sync field aliases for lv:{} rv:{}", lv, rv);
 
-        let max_field_depth =15;
+        let max_field_depth = 15;
 
         if depth > max_field_depth {
             return;
