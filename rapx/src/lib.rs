@@ -506,19 +506,22 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
     if callback.is_range_analysis_enabled() {
         match callback.range {
             1 => {
-                let mut analyzer = RangeAnalyzer::<i64>::new(tcx, false);
+                let context = z3::Context::new(&z3::Config::new());
+                let mut analyzer = RangeAnalyzer::<i64>::new(&context, tcx, false);
                 analyzer.run();
                 let result = analyzer.get_all_fn_ranges();
                 rap_info!("{}", RAResultMapWrapper(result));
             }
             2 => {
-                let mut analyzer = RangeAnalyzer::<i64>::new(tcx, true);
+                let context = z3::Context::new(&z3::Config::new());
+                let mut analyzer = RangeAnalyzer::<i64>::new(&context, tcx, true);
                 analyzer.run();
                 let result = analyzer.get_all_fn_ranges();
                 rap_info!("{}", RAResultMapWrapper(result));
             }
             3 => {
-                let mut analyzer = RangeAnalyzer::<i64>::new(tcx, false);
+                let context = z3::Context::new(&z3::Config::new());
+                let mut analyzer = RangeAnalyzer::<i64>::new(&context, tcx, false);
                 analyzer.start_path_constraints_analysis();
                 let result = analyzer.get_all_path_constraints();
                 rap_info!("{}", PathConstraintMapWrapper(result));

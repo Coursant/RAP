@@ -42,22 +42,24 @@ use std::{
 
 #[derive(Clone)]
 
-pub struct ConstraintGraph<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
+pub struct ConstraintGraph<'ctx, 'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     pub tcx: TyCtxt<'tcx>,
     pub body: &'tcx Body<'tcx>,
+    pub z3_ctx: &'ctx z3::Context,
+    pub z3builder: Z3ExprBuilder<'ctx, 'tcx>,
     // Protected fields
-    pub self_def_id: DefId,      // The DefId of the function being analyzed
-    pub vars: VarNodes<'tcx, T>, // The variables of the source program
+    pub self_def_id: DefId, // The DefId of the function being analyzed
+    pub vars: VarNodes<'ctx, 'tcx, T>, // The variables of the source program
     pub local_inserted: HashSet<Local>,
 
-    pub array_vars: VarNodes<'tcx, T>, // The array variables of the source program
-    pub oprs: Vec<BasicOpKind<'tcx, T>>, // The operations of the source program
+    pub array_vars: VarNodes<'ctx, 'tcx, T>, // The array variables of the source program
+    pub oprs: Vec<BasicOpKind<'ctx, 'tcx, T>>, // The operations of the source program
 
     // func: Option<Function>,             // Save the last Function analyzed
     pub defmap: DefMap<'tcx>, // Map from variables to the operations that define them
     pub usemap: UseMap<'tcx>, // Map from variables to operations where variables are used
     pub symbmap: SymbMap<'tcx>, // Map from variables to operations where they appear as bounds
-    pub values_branchmap: HashMap<&'tcx Place<'tcx>, ValueBranchMap<'tcx, T>>, // Store intervals, basic blocks, and branches
+    pub values_branchmap: HashMap<&'tcx Place<'tcx>, ValueBranchMap<'ctx, 'tcx, T>>, // Store intervals, basic blocks, and branches
     constant_vector: Vec<T>, // Vector for constants from an SCC
 
     pub inst_rand_place_set: Vec<Place<'tcx>>,
@@ -81,7 +83,7 @@ pub struct ConstraintGraph<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     pub unique_adt_path: HashMap<String, usize>,
 }
 
-impl<'tcx, T> ConstraintGraph<'tcx, T>
+impl<'ctx, 'tcx, T> ConstraintGraph<'ctx, 'tcx, T>
 where
     T: IntervalArithmetic + ConstConvert + Debug,
 {
@@ -92,6 +94,7 @@ where
         T::from_tyconst(c)
     }
     pub fn new(
+        z3_ctx: &'ctx z3::Context,
         body: &'tcx Body<'tcx>,
         tcx: TyCtxt<'tcx>,
         self_def_id: DefId,
@@ -102,6 +105,8 @@ where
         unique_adt_path.insert("std::ops::Range".to_string(), 1);
 
         Self {
+            z3_ctx,
+            z3builder: Z3ExprBuilder::new(tcx, z3_ctx, body, self_def_id, 64), // Assuming a default bit-width of 64
             tcx,
             body,
             self_def_id,
@@ -136,10 +141,17 @@ where
             unique_adt_path: unique_adt_path,
         }
     }
-    pub fn new_without_ssa(body: &'tcx Body<'tcx>, tcx: TyCtxt<'tcx>, self_def_id: DefId) -> Self {
+    pub fn new_without_ssa(
+        z3_ctx: &'ctx z3::Context,
+        body: &'tcx Body<'tcx>,
+        tcx: TyCtxt<'tcx>,
+        self_def_id: DefId,
+    ) -> Self {
         let mut unique_adt_path: HashMap<String, usize> = HashMap::new();
         unique_adt_path.insert("std::ops::Range".to_string(), 1);
         Self {
+            z3_ctx,
+            z3builder: Z3ExprBuilder::new(tcx, z3_ctx, body, self_def_id, 64),
             tcx,
             body,
             self_def_id,
@@ -272,7 +284,7 @@ where
         final_vars
     }
     // pub fn filter_final_vars(
-    //     vars: &VarNodes<'tcx, T>,
+    //     vars: &VarNodes<'ctx,'tcx, T>,
     //     places_map: &HashMap<Place<'tcx>, HashSet<Place<'tcx>>>,
     // ) -> HashMap<Place<'tcx>, Range<T>> {
     //     let mut final_vars = HashMap::new();
@@ -411,7 +423,7 @@ where
     //     self.inst_rand_place_set.push(place);
     //     place
     // }
-    pub fn get_vars(&self) -> &VarNodes<'tcx, T> {
+    pub fn get_vars(&self) -> &VarNodes<'ctx, 'tcx, T> {
         &self.vars
     }
     pub fn get_field_place(&self, adt_place: Place<'tcx>, field_index: FieldIdx) -> Place<'tcx> {
@@ -442,11 +454,11 @@ where
         };
         new_place
     }
-    pub fn add_varnode(&mut self, v: &'tcx Place<'tcx>) -> &mut VarNode<'tcx, T> {
+    pub fn add_varnode(&mut self, v: &'tcx Place<'tcx>) -> &mut VarNode<'ctx, 'tcx, T> {
         let local_decls = &self.body.local_decls;
 
         let node = VarNode::new(v);
-        let node_ref: &mut VarNode<'tcx, T> = self
+        let node_ref: &mut VarNode<'ctx, 'tcx, T> = self
             .vars
             .entry(v)
             // .and_modify(|old| *old = node.clone())
@@ -527,7 +539,7 @@ where
         &mut self,
         v: &'tcx Place<'tcx>,
         rvalue: &'tcx Rvalue<'tcx>,
-    ) -> &mut VarNode<'tcx, T> {
+    ) -> &mut VarNode<'ctx, 'tcx, T> {
         if !self.vars.contains_key(v) {
             let mut place_ctx: Vec<&Place<'tcx>> = self.vars.keys().map(|p| *p).collect();
             let node = VarNode::new_symb(v, SymbExpr::from_rvalue(rvalue, place_ctx.clone()));
@@ -568,13 +580,13 @@ where
         &mut self,
         v: &'tcx Place<'tcx>,
         rvalue: &'tcx Rvalue<'tcx>,
-    ) -> &mut VarNode<'tcx, T> {
+    ) -> &mut VarNode<'ctx, 'tcx, T> {
         let mut place_ctx: Vec<&Place<'tcx>> = self.vars.keys().map(|p| *p).collect();
 
         let local_decls = &self.body.local_decls;
         let node = VarNode::new_symb(v, SymbExpr::from_rvalue(rvalue, place_ctx.clone()));
         rap_debug!("def node:{:?}", node);
-        let node_ref: &mut VarNode<'tcx, T> = self
+        let node_ref: &mut VarNode<'ctx, 'tcx, T> = self
             .vars
             .entry(v)
             .and_modify(|old| *old = node.clone())
@@ -615,7 +627,7 @@ where
     }
     pub fn resolve_all_symexpr(&mut self) {
         let lookup_context = self.vars.clone();
-        let mut nodes: Vec<&mut VarNode<'tcx, T>> = self.vars.values_mut().collect();
+        let mut nodes: Vec<&mut VarNode<'ctx, 'tcx, T>> = self.vars.values_mut().collect();
         nodes.sort_by(|a, b| a.v.local.as_usize().cmp(&b.v.local.as_usize()));
         for node in nodes {
             if let IntervalType::Basic(basic) = &mut node.interval {
@@ -1316,7 +1328,7 @@ where
     ) {
         rap_trace!("ssa_op{:?}\n", inst);
 
-        let sink_node: &mut VarNode<'_, T> = self.def_add_varnode_sym(sink, rvalue);
+        let sink_node: &mut VarNode<'ctx, 'tcx, T> = self.def_add_varnode_sym(sink, rvalue);
         rap_trace!("addsink_in_ssa_op{:?}\n", sink_node);
 
         let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
@@ -1476,7 +1488,7 @@ where
         };
         let op = &operands[FieldIdx::from_usize(loc_2)];
         let bop_index = self.oprs.len();
-        let BI: IntervalType<'_, T>;
+        let BI: IntervalType<'ctx, 'tcx, T>;
         rap_trace!("essa_op operand1 {:?}\n", source1.unwrap());
         if let Operand::Constant(c) = op {
             let vbm = self.values_branchmap.get(source1.unwrap()).unwrap();
@@ -1791,8 +1803,8 @@ where
     pub fn widen(
         &mut self,
         op: usize,
-        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
-        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
+        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'ctx, 'tcx, T>>>>,
+        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'ctx, 'tcx, T>>>>,
     ) -> bool {
         // use crate::range_util::{get_first_less_from_vector, get_first_greater_from_vector};
         // assert!(!constant_vector.is_empty(), "Invalid constant vector");
@@ -1859,8 +1871,8 @@ where
     pub fn narrow(
         &mut self,
         op: usize,
-        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
-        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
+        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'ctx, 'tcx, T>>>>,
+        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'ctx, 'tcx, T>>>>,
     ) -> bool {
         let op_kind = &self.oprs[op];
         let sink = op_kind.get_sink();
@@ -1928,8 +1940,8 @@ where
         &mut self,
         comp_use_map: &HashMap<&'tcx Place<'tcx>, HashSet<usize>>,
         entry_points: &HashSet<&'tcx Place<'tcx>>,
-        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
-        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
+        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'ctx, 'tcx, T>>>>,
+        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'ctx, 'tcx, T>>>>,
     ) {
         let mut worklist: Vec<&'tcx Place<'tcx>> = entry_points.iter().cloned().collect();
 
@@ -1951,8 +1963,8 @@ where
         &mut self,
         comp_use_map: &HashMap<&'tcx Place<'tcx>, HashSet<usize>>,
         entry_points: &HashSet<&'tcx Place<'tcx>>,
-        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
-        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
+        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'ctx, 'tcx, T>>>>,
+        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'ctx, 'tcx, T>>>>,
     ) {
         let mut worklist: Vec<&'tcx Place<'tcx>> = entry_points.iter().cloned().collect();
         let mut iteration = 0;
@@ -1981,8 +1993,8 @@ where
         &mut self,
         component: &HashSet<&'tcx Place<'tcx>>,
         active_vars: &mut HashSet<&'tcx Place<'tcx>>,
-        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
-        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
+        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'ctx, 'tcx, T>>>>,
+        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'ctx, 'tcx, T>>>>,
     ) {
         for place in component {
             let node = self.vars.get(place).unwrap();
@@ -1992,8 +2004,8 @@ where
         &mut self,
         component: &HashSet<&'tcx Place<'tcx>>,
         entry_points: &mut HashSet<&'tcx Place<'tcx>>,
-        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
-        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
+        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'ctx, 'tcx, T>>>>,
+        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'ctx, 'tcx, T>>>>,
     ) {
         for &place in component {
             let op = self.defmap.get(place).unwrap();
@@ -2014,8 +2026,8 @@ where
     fn propagate_to_next_scc(
         &mut self,
         component: &HashSet<&'tcx Place<'tcx>>,
-        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
-        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
+        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'ctx, 'tcx, T>>>>,
+        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'ctx, 'tcx, T>>>>,
     ) {
         for &place in component.iter() {
             let node = self.vars.get_mut(place).unwrap();
@@ -2057,8 +2069,8 @@ where
     }
     pub fn solve_const_func_call(
         &mut self,
-        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
-        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
+        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'ctx, 'tcx, T>>>>,
+        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'ctx, 'tcx, T>>>>,
     ) {
         for (&sink, op) in &self.const_func_place {
             rap_trace!(
@@ -2073,19 +2085,19 @@ where
             }
         }
     }
-    pub fn store_vars(&mut self, varnodes_vec: &mut Vec<RefCell<VarNodes<'tcx, T>>>) {
+    pub fn store_vars(&mut self, varnodes_vec: &mut Vec<RefCell<VarNodes<'ctx, 'tcx, T>>>) {
         rap_trace!("Storing vars\n");
         let old_vars = self.vars.clone();
         varnodes_vec.push(RefCell::new(old_vars));
     }
-    pub fn reset_vars(&mut self, varnodes_vec: &mut Vec<RefCell<VarNodes<'tcx, T>>>) {
+    pub fn reset_vars(&mut self, varnodes_vec: &mut Vec<RefCell<VarNodes<'ctx, 'tcx, T>>>) {
         rap_trace!("Resetting vars\n");
         self.vars = varnodes_vec[0].borrow_mut().clone();
     }
     pub fn find_intervals(
         &mut self,
-        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
-        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
+        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'ctx, 'tcx, T>>>>,
+        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'ctx, 'tcx, T>>>>,
     ) {
         // let scc_list = Nuutila::new(&self.vars, &self.usemap, &self.symbmap,false,&self.oprs);
         // self.print_vars();
@@ -2380,8 +2392,8 @@ where
     }
 }
 #[derive(Debug)]
-pub struct Nuutila<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
-    pub variables: &'tcx VarNodes<'tcx, T>,
+pub struct Nuutila<'ctx, 'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
+    pub variables: &'tcx VarNodes<'ctx, 'tcx, T>,
     pub index: i32,
     pub dfs: HashMap<&'tcx Place<'tcx>, i32>,
     pub root: HashMap<&'tcx Place<'tcx>, &'tcx Place<'tcx>>,
@@ -2391,18 +2403,18 @@ pub struct Nuutila<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     // pub oprs: &Vec<BasicOpKind<'tcx, T>>,
 }
 
-impl<'tcx, T> Nuutila<'tcx, T>
+impl<'ctx, 'tcx, T> Nuutila<'ctx, 'tcx, T>
 where
     T: IntervalArithmetic + ConstConvert + Debug,
 {
     pub fn new(
-        varNodes: &'tcx VarNodes<'tcx, T>,
+        varNodes: &'tcx VarNodes<'ctx, 'tcx, T>,
         use_map: &'tcx UseMap<'tcx>,
         symb_map: &'tcx SymbMap<'tcx>,
         single: bool,
-        oprs: &'tcx Vec<BasicOpKind<'tcx, T>>,
+        oprs: &'tcx Vec<BasicOpKind<'ctx, 'tcx, T>>,
     ) -> Self {
-        let mut n: Nuutila<'_, T> = Nuutila {
+        let mut n: Nuutila<'ctx, 'tcx, T> = Nuutila {
             variables: varNodes,
             index: 0,
             dfs: HashMap::new(),
@@ -2451,7 +2463,7 @@ where
         place: &'tcx Place<'tcx>,
         stack: &mut Vec<&'tcx Place<'tcx>>,
         use_map: &'tcx UseMap<'tcx>,
-        oprs: &'tcx Vec<BasicOpKind<'tcx, T>>,
+        oprs: &'tcx Vec<BasicOpKind<'ctx, 'tcx, T>>,
     ) {
         self.dfs.entry(place).and_modify(|v| *v = self.index);
         self.index += 1;
@@ -2505,7 +2517,7 @@ where
         &mut self,
         _symb_map: &'tcx SymbMap<'tcx>,
         _use_map: &'tcx UseMap<'tcx>,
-        _vars: &'tcx VarNodes<'tcx, T>,
+        _vars: &'tcx VarNodes<'ctx, 'tcx, T>,
     ) {
         todo!()
     }

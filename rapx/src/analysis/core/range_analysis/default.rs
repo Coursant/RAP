@@ -44,10 +44,10 @@ use super::{PathConstraint, PathConstraintMap, RAResult, RAResultMap, RAVecResul
 /// RangeAnalyzer performs MIR-based interprocedural range analysis.
 /// It builds SSA/ESSA, constraint graphs, propagates intervals,
 /// and optionally extracts path constraints.
-pub struct RangeAnalyzer<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
+pub struct RangeAnalyzer<'ctx, 'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     pub tcx: TyCtxt<'tcx>, // Compiler type context
     pub debug: bool,       // Enable debug output
-
+    pub z3_ctx: &'ctx z3::Context,
     pub ssa_def_id: Option<DefId>,  // SSA marker function DefId
     pub essa_def_id: Option<DefId>, // ESSA marker function DefId
 
@@ -55,20 +55,21 @@ pub struct RangeAnalyzer<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     // Mapping from original places to SSA-renamed places
     pub ssa_places_mapping: FxHashMap<DefId, HashMap<Place<'tcx>, HashSet<Place<'tcx>>>>,
 
-    pub fn_constraintgraph_mapping: FxHashMap<DefId, ConstraintGraph<'tcx, T>>,
+    pub fn_constraintgraph_mapping: FxHashMap<DefId, ConstraintGraph<'ctx, 'tcx, T>>,
     pub callgraph: CallGraph<'tcx>,
     pub body_map: FxHashMap<DefId, Body<'tcx>>,
-    pub cg_map: FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
+    pub cg_map: FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'ctx, 'tcx, T>>>>,
 
     // Variable nodes collected per function (per call context)
-    pub vars_map: FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
+    pub vars_map: FxHashMap<DefId, Vec<RefCell<VarNodes<'ctx, 'tcx, T>>>>,
 
     pub final_vars_vec: RAVecResultMap<'tcx, T>, // Interval results per call
 
     pub path_constraints: PathConstraintMap<'tcx>, // Path-sensitive constraints
 }
 
-impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> Analysis for RangeAnalyzer<'tcx, T>
+impl<'ctx, 'tcx, T: IntervalArithmetic + ConstConvert + Debug> Analysis
+    for RangeAnalyzer<'ctx, 'tcx, T>
 where
     T: IntervalArithmetic + ConstConvert + Debug,
 {
@@ -89,8 +90,8 @@ where
     }
 }
 
-impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> RangeAnalysis<'tcx, T>
-    for RangeAnalyzer<'tcx, T>
+impl<'ctx, 'tcx, T: IntervalArithmetic + ConstConvert + Debug> RangeAnalysis<'tcx, T>
+    for RangeAnalyzer<'ctx, 'tcx, T>
 where
     T: IntervalArithmetic + ConstConvert + Debug,
 {
@@ -120,11 +121,11 @@ where
     }
 }
 
-impl<'tcx, T> RangeAnalyzer<'tcx, T>
+impl<'ctx, 'tcx, T> RangeAnalyzer<'ctx, 'tcx, T>
 where
     T: IntervalArithmetic + ConstConvert + Debug,
 {
-    pub fn new(tcx: TyCtxt<'tcx>, debug: bool) -> Self {
+    pub fn new(z3_ctx: &'ctx z3::Context, tcx: TyCtxt<'tcx>, debug: bool) -> Self {
         let mut ssa_id = None;
         let mut essa_id = None;
 
@@ -149,6 +150,7 @@ where
             }
         }
         Self {
+            z3_ctx: z3_ctx,
             tcx: tcx,
             debug,
             ssa_def_id: ssa_id,
@@ -172,8 +174,14 @@ where
         );
         let ssa_def_id = self.ssa_def_id.expect("SSA definition ID is not set");
         let essa_def_id = self.essa_def_id.expect("ESSA definition ID is not set");
-        let mut cg: ConstraintGraph<'tcx, T> =
-            ConstraintGraph::new(body_mut_ref, self.tcx, def_id, essa_def_id, ssa_def_id);
+        let mut cg: ConstraintGraph<'ctx, 'tcx, T> = ConstraintGraph::new(
+            self.z3_ctx,
+            body_mut_ref,
+            self.tcx,
+            def_id,
+            essa_def_id,
+            ssa_def_id,
+        );
         cg.build_graph(body_mut_ref);
         cg.build_nuutila(false);
         // cg.rap_print_vars();
@@ -320,8 +328,8 @@ where
             let mut body = self.tcx.optimized_mir(def_id).clone();
             let body_mut_ref = unsafe { &mut *(&mut body as *mut Body<'tcx>) };
 
-            let mut cg: ConstraintGraph<'tcx, T> =
-                ConstraintGraph::new_without_ssa(body_mut_ref, self.tcx, def_id);
+            let mut cg: ConstraintGraph<'ctx, 'tcx, T> =
+                ConstraintGraph::new_without_ssa(self.z3_ctx, body_mut_ref, self.tcx, def_id);
             let mut graph = MopGraph::new(self.tcx, def_id);
             graph.find_scc();
             let paths: Vec<Vec<usize>> = graph.get_all_branch_sub_blocks_paths();
@@ -357,8 +365,12 @@ where
                     let mut body = self.tcx.optimized_mir(def_id).clone();
                     let body_mut_ref = unsafe { &mut *(&mut body as *mut Body<'tcx>) };
 
-                    let mut cg: ConstraintGraph<'tcx, T> =
-                        ConstraintGraph::new_without_ssa(body_mut_ref, self.tcx, def_id);
+                    let mut cg: ConstraintGraph<'ctx, 'tcx, T> = ConstraintGraph::new_without_ssa(
+                        self.z3_ctx,
+                        body_mut_ref,
+                        self.tcx,
+                        def_id,
+                    );
                     let mut graph = MopGraph::new(self.tcx, def_id);
                     graph.find_scc();
                     let paths: Vec<Vec<usize>> = graph.get_all_branch_sub_blocks_paths();

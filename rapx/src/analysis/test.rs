@@ -34,10 +34,10 @@ impl<'tcx> Test<'tcx> {
         heap_analysis.run();
         let result = heap_analysis.get_all_items();
         rap_info!("{}", OHAResultMapWrapper(result));
-
-        let mut range_analysis = RangeAnalyzer::<i64>::new(self.tcx, false);
-        range_analysis.run();
-        let path_constraint = range_analysis.get_all_path_constraints();
+        let context = z3::Context::new(&z3::Config::new());
+        let mut analyzer = RangeAnalyzer::<i64>::new(&context, self.tcx, false);
+        analyzer.run();
+        let path_constraint = analyzer.get_all_path_constraints();
         rap_info!("{}", PathConstraintMapWrapper(path_constraint));
     }
 }

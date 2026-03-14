@@ -266,10 +266,10 @@ where
 pub struct Meet;
 
 impl Meet {
-    pub fn widen<'tcx, T: IntervalArithmetic + ConstConvert>(
-        op: &mut BasicOpKind<'tcx, T>,
+    pub fn widen<'ctx, 'tcx, T: IntervalArithmetic + ConstConvert>(
+        op: &mut BasicOpKind<'ctx, 'tcx, T>,
         constant_vector: &[T],
-        vars: &mut VarNodes<'tcx, T>,
+        vars: &mut VarNodes<'ctx, 'tcx, T>,
     ) -> bool {
         // use crate::range_util::{get_first_less_from_vector, get_first_greater_from_vector};
 
@@ -309,9 +309,9 @@ impl Meet {
         );
         old_interval.range != new_sink_interval.range
     }
-    pub fn narrow<'tcx, T: IntervalArithmetic + ConstConvert>(
-        op: &mut BasicOpKind<'tcx, T>,
-        vars: &mut VarNodes<'tcx, T>,
+    pub fn narrow<'ctx, 'tcx, T: IntervalArithmetic + ConstConvert>(
+        op: &mut BasicOpKind<'ctx, 'tcx, T>,
+        vars: &mut VarNodes<'ctx, 'tcx, T>,
     ) -> bool {
         let old_range = vars[op.get_sink()].get_range();
         let o_lower = old_range.get_lower().clone();

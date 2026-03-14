@@ -11,7 +11,7 @@
 // }
 fn method_for_slice_loop() {
     let mut a = [0; 10];
-    let slice_index = 5;
+    let slice_index = 3;
     let slice = &mut a[1..slice_index];
     for i in 0..slice.len() {
         slice[i] = i+1 ;
@@ -90,4 +90,15 @@ fn main() {
     // method_array_from_fn();
     // method_while_loop();
     // method_unsafe_ptr();
+}
+pub fn test_standard_for_loop() -> i32 {
+    let mut sum = 0;
+    let mut arr = [0; 10];
+
+    // LLVM's SCEV easily proves `i` is within `0..arr.len()`.
+    // Our interval domain should seamlessly map `i` to `[0, arr.len() - 1]`.
+    for i in 0..arr.len() {
+        sum += arr[i]; 
+    }
+    sum
 }
