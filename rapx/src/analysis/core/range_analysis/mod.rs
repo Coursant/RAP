@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 pub mod default;
 pub mod domain;
+use crate::analysis::core::range_analysis::domain::SymbolicExpr::SymbExpr;
 use crate::{
     analysis::{
         Analysis,
@@ -11,8 +12,6 @@ use crate::{
     utils::source::get_fn_name_byid,
 };
 use once_cell::sync::Lazy;
-// use intervals::Closed;
-use rust_intervals::Interval;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{BinOp, Place};
@@ -22,11 +21,11 @@ use std::{
     collections::HashMap,
     fmt::{self, Debug, Display},
 };
-pub type RAResult<'tcx, T> = HashMap<Place<'tcx>, HashMap<Place<'tcx>, Range<T>>>;
+pub type RAResult<'tcx, T> = HashMap<Place<'tcx>, HashMap<Place<'tcx>, Range<'tcx, T>>>;
 pub type RAResultMap<'tcx, T> =
-    FxHashMap<DefId, HashMap<Place<'tcx>, HashMap<Place<'tcx>, Range<T>>>>;
+    FxHashMap<DefId, HashMap<Place<'tcx>, HashMap<Place<'tcx>, Range<'tcx, T>>>>;
 pub type RAVecResultMap<'tcx, T> =
-    FxHashMap<DefId, Vec<HashMap<Place<'tcx>, HashMap<Place<'tcx>, Range<T>>>>>;
+    FxHashMap<DefId, Vec<HashMap<Place<'tcx>, HashMap<Place<'tcx>, Range<'tcx, T>>>>>;
 
 pub type PathConstraint<'tcx> = HashMap<Vec<usize>, Vec<(Place<'tcx>, Place<'tcx>, BinOp)>>;
 pub type PathConstraintMap<'tcx> =
@@ -193,36 +192,39 @@ impl fmt::Display for RangeType {
     }
 }
 
-#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 
-pub struct Range<T>
+pub struct Range<'tcx, T>
 where
     T: IntervalArithmetic,
 {
     pub rtype: RangeType,
-    pub range: Interval<T>,
+    pub lower: T,
+    pub upper: T,
+    pub lower_expr: SymbExpr<'tcx>,
+    pub upper_expr: SymbExpr<'tcx>,
 }
 static STR_MIN: Lazy<String> = Lazy::new(|| "Min".to_string());
 static STR_MAX: Lazy<String> = Lazy::new(|| "Max".to_string());
-impl<T> Display for Range<T>
+impl<'tcx, T> Display for Range<'tcx, T>
 where
     T: IntervalArithmetic + std::fmt::Display,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let lower: String = if *self.range.lower().unwrap() == T::min_value() {
+        let lower: String = if self.lower == T::min_value() {
             STR_MIN.clone()
-        } else if *self.range.lower().unwrap() == T::max_value() {
+        } else if self.lower == T::max_value() {
             STR_MAX.clone()
         } else {
-            self.range.lower().unwrap().to_string()
+            self.lower.to_string()
         };
 
-        let upper: String = if *self.range.upper().unwrap() == T::min_value() {
+        let upper: String = if self.upper == T::min_value() {
             STR_MIN.clone()
-        } else if *self.range.upper().unwrap() == T::max_value() {
+        } else if self.upper == T::max_value() {
             STR_MAX.clone()
         } else {
-            self.range.upper().unwrap().to_string()
+            self.upper.to_string()
         };
 
         write!(f, "{:?} [{}, {}]", self.rtype, lower, upper)

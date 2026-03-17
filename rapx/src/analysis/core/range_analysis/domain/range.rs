@@ -12,7 +12,10 @@ use rustc_middle::mir::{BinOp, UnOp};
 use std::ops::{Add, Mul, Sub};
 
 use crate::{
-    analysis::core::range_analysis::{Range, RangeType, domain::SymbolicExpr::IntervalTypeTrait},
+    analysis::core::range_analysis::{
+        Range, RangeType,
+        domain::SymbolicExpr::{IntervalTypeTrait, SymbExpr},
+    },
     rap_trace,
 };
 
@@ -55,49 +58,72 @@ use super::domain::*;
 
 //     write!(f, "{} [{}, {}]", self.rtype, &**lower, &**upper)
 // }
-
-impl<T> Range<T>
+impl<'tcx, T> Range<'tcx, T>
 where
-    T: IntervalArithmetic,
+    T: IntervalArithmetic + Clone,
 {
     // Parameterized constructor
     pub fn new(lb: T, ub: T, rtype: RangeType) -> Self {
         Self {
             rtype,
-            range: Interval::new_closed_closed(lb, ub),
+            lower: lb,
+            upper: ub,
+            lower_expr: SymbExpr::Unknown,
+            upper_expr: SymbExpr::Unknown,
         }
     }
+
+    pub fn new_symb(
+        lb: T,
+        ub: T,
+        lower_expr: SymbExpr<'tcx>,
+        upper_expr: SymbExpr<'tcx>,
+        rtype: RangeType,
+    ) -> Self {
+        Self {
+            rtype,
+            lower: lb,
+            upper: ub,
+            lower_expr,
+            upper_expr,
+        }
+    }
+
     pub fn default(default: T) -> Self {
         Self {
             rtype: RangeType::Unknown,
-
-            range: Interval::new_closed_closed(default, default),
+            lower: default,
+            upper: default,
+            lower_expr: SymbExpr::Unknown,
+            upper_expr: SymbExpr::Unknown,
         }
     }
-    // Getter for lower bound
-    pub fn init(r: Interval<T>) -> Self {
+
+    pub fn init(lb: T, ub: T) -> Self {
         Self {
             rtype: RangeType::Regular,
-            range: r,
+            lower: lb,
+            upper: ub,
+            lower_expr: SymbExpr::Unknown,
+            upper_expr: SymbExpr::Unknown,
         }
     }
+
+    // Getter for lower bound
     pub fn get_lower(&self) -> T {
-        self.range.lower().unwrap().clone()
+        self.lower.clone()
     }
 
     // Getter for upper bound
     pub fn get_upper(&self) -> T {
-        self.range.upper().unwrap().clone()
+        self.upper.clone()
     }
-
-    // // Setter for lower bound
-    // pub fn set_lower(&mut self, newl: T) {
-    // }
-
-    // // Setter for upper bound
-    // pub fn set_upper(&mut self, newu: T) {
-    // }
-
+    pub fn get_lower_expr(&self) -> SymbExpr<'tcx> {
+        self.lower_expr.clone()
+    }
+    pub fn get_upper_expr(&self) -> SymbExpr<'tcx> {
+        self.upper_expr.clone()
+    }
     // Check if the range type is unknown
     pub fn is_unknown(&self) -> bool {
         self.rtype == RangeType::Unknown
@@ -127,142 +153,142 @@ where
     pub fn set_empty(&mut self) {
         self.rtype = RangeType::Empty;
     }
+
     pub fn set_default(&mut self) {
         self.rtype = RangeType::Regular;
-        self.range = Interval::new_closed_closed(T::min_value(), T::max_value());
+        self.lower = T::min_value();
+        self.upper = T::max_value();
+        self.lower_expr = SymbExpr::Unknown;
+        self.upper_expr = SymbExpr::Unknown;
     }
-    pub fn add(&self, other: &Range<T>) -> Range<T> {
+
+    pub fn add(&self, other: &Range<'tcx, T>) -> Range<'tcx, T> {
         let a = self
             .get_lower()
-            .clone()
-            .checked_add(&other.get_lower().clone())
+            .checked_add(&other.get_lower())
             .unwrap_or(T::max_value());
 
         let b = self
             .get_upper()
-            .clone()
-            .checked_add(&other.get_upper().clone())
+            .checked_add(&other.get_upper())
             .unwrap_or(T::max_value());
 
-        Range::new(a, b, RangeType::Regular)
+        let a_expr = self.lower_expr.add(&other.lower_expr);
+        let b_expr = self.upper_expr.add(&other.upper_expr);
+
+        Range::new_symb(a, b, a_expr, b_expr, RangeType::Regular)
     }
 
-    pub fn sub(&self, other: &Range<T>) -> Range<T> {
+    pub fn sub(&self, other: &Range<'tcx, T>) -> Range<'tcx, T> {
         let a = self
             .get_lower()
-            .clone()
-            .checked_sub(&other.get_upper().clone())
+            .checked_sub(&other.get_upper())
             .unwrap_or(T::min_value());
 
         let b = self
             .get_upper()
-            .clone()
-            .checked_sub(&other.get_lower().clone())
+            .checked_sub(&other.get_lower())
             .unwrap_or(T::max_value());
 
-        Range::new(a, b, RangeType::Regular)
+        let a_expr = self.lower_expr.sub(&other.upper_expr);
+        let b_expr = self.upper_expr.sub(&other.lower_expr);
+
+        Range::new_symb(a, b, a_expr, b_expr, RangeType::Regular)
     }
 
-    pub fn mul(&self, other: &Range<T>) -> Range<T> {
+    pub fn mul(&self, other: &Range<'tcx, T>) -> Range<'tcx, T> {
         let candidates = vec![
-            self.get_lower().clone() * other.get_lower().clone(),
-            self.get_lower().clone() * other.get_upper().clone(),
-            self.get_upper().clone() * other.get_lower().clone(),
-            self.get_upper().clone() * other.get_upper().clone(),
+            (
+                self.get_lower() * other.get_lower(),
+                self.lower_expr.mul(&other.lower_expr),
+            ),
+            (
+                self.get_lower() * other.get_upper(),
+                self.lower_expr.mul(&other.upper_expr),
+            ),
+            (
+                self.get_upper() * other.get_lower(),
+                self.upper_expr.mul(&other.lower_expr),
+            ),
+            (
+                self.get_upper() * other.get_upper(),
+                self.upper_expr.mul(&other.upper_expr),
+            ),
         ];
-        let min = candidates
+
+        let (min_val, min_expr) = candidates
             .iter()
-            .cloned()
-            .min_by(|a, b| a.partial_cmp(b).unwrap())
-            .unwrap();
-        let max = candidates
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+            .unwrap()
+            .clone();
+
+        let (max_val, max_expr) = candidates
             .iter()
-            .cloned()
-            .max_by(|a, b| a.partial_cmp(b).unwrap())
-            .unwrap();
-        Range::new(min, max, RangeType::Regular)
+            .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+            .unwrap()
+            .clone();
+
+        Range::new_symb(min_val, max_val, min_expr, max_expr, RangeType::Regular)
     }
 
-    pub fn intersectwith(&self, other: &Range<T>) -> Range<T> {
+    pub fn intersectwith(&self, other: &Range<'tcx, T>) -> Range<'tcx, T> {
         if self.is_unknown() {
-            return Range::new(
-                other.get_lower().clone(),
-                other.get_upper().clone(),
-                RangeType::Regular,
-            );
+            return other.clone();
         } else if other.is_unknown() {
-            return Range::new(
-                self.get_lower().clone(),
-                self.get_upper().clone(),
-                RangeType::Regular,
-            );
+            return self.clone();
         } else {
-            let result = self.range.clone().intersection(&other.range.clone());
-            let mut range = Range::default(T::min_value());
+            let (left, left_expr) = match self.get_lower().partial_cmp(&other.get_lower()).unwrap()
+            {
+                std::cmp::Ordering::Greater | std::cmp::Ordering::Equal => {
+                    (self.get_lower(), self.lower_expr.clone())
+                }
+                std::cmp::Ordering::Less => (other.get_lower(), other.lower_expr.clone()),
+            };
 
-            if let r = result {
-                range = Range::init(r);
-                range
+            let (right, right_expr) =
+                match self.get_upper().partial_cmp(&other.get_upper()).unwrap() {
+                    std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
+                        (self.get_upper(), self.upper_expr.clone())
+                    }
+                    std::cmp::Ordering::Greater => (other.get_upper(), other.upper_expr.clone()),
+                };
+
+            if left <= right {
+                Range::new_symb(left, right, left_expr, right_expr, RangeType::Regular)
             } else {
-                range
+                let mut empty_range = Range::default(T::min_value());
+                empty_range.set_empty();
+                empty_range
             }
-
-            // let left = std::cmp::max_by(self.get_lower(), other.get_lower(), |a, b| {
-            //     a.partial_cmp(b).unwrap()
-            // });
-            // let right = std::cmp::min_by(self.get_upper(), other.get_upper(), |a, b| {
-            //     a.partial_cmp(b).unwrap()
-            // });
-            // if left <= right {
-            //     Range::new(left.clone(), right.clone(), RangeType::Regular)
-            // } else {
-            //     let empty = T::min_value();
-            //     Range::new(empty.clone(), empty, RangeType::Empty)
-            // }
         }
     }
-    pub fn unionwith(&self, other: &Range<T>) -> Range<T> {
+
+    pub fn unionwith(&self, other: &Range<'tcx, T>) -> Range<'tcx, T> {
         if self.is_unknown() {
-            return Range::new(
-                other.get_lower().clone(),
-                other.get_upper().clone(),
-                RangeType::Regular,
-            );
+            return other.clone();
         } else if other.is_unknown() {
-            return Range::new(
-                self.get_lower().clone(),
-                self.get_upper().clone(),
-                RangeType::Regular,
-            );
+            return self.clone();
         } else {
-            let left = std::cmp::min_by(self.get_lower(), other.get_lower(), |a, b| {
-                a.partial_cmp(b).unwrap()
-            });
-            let right = std::cmp::max_by(self.get_upper(), other.get_upper(), |a, b| {
-                a.partial_cmp(b).unwrap()
-            });
-            Range::new(left.clone(), right.clone(), RangeType::Regular)
+            let (left, left_expr) = match self.get_lower().partial_cmp(&other.get_lower()).unwrap()
+            {
+                std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
+                    (self.get_lower(), self.lower_expr.clone())
+                }
+                std::cmp::Ordering::Greater => (other.get_lower(), other.lower_expr.clone()),
+            };
+
+            let (right, right_expr) =
+                match self.get_upper().partial_cmp(&other.get_upper()).unwrap() {
+                    std::cmp::Ordering::Greater | std::cmp::Ordering::Equal => {
+                        (self.get_upper(), self.upper_expr.clone())
+                    }
+                    std::cmp::Ordering::Less => (other.get_upper(), other.upper_expr.clone()),
+                };
+
+            Range::new_symb(left, right, left_expr, right_expr, RangeType::Regular)
         }
     }
-    // Check if the range is the maximum range
-    // pub fn is_max_range(&self) -> bool {
-    //     self.range.lower() == T::min_value() && self.range.upper() == T::max_value()
-    // }
-
-    // // Print the range
-    // pub fn print(&self) {
-    //     println!("Range: [{} - {}]", self.get_lower(), self.get_upper());
-    // }
-
-    // // Arithmetic and bitwise operations (example for addition)
-    // pub fn add(&self, other: &Range<T>) -> Range<T> {
-    //     let lower = self.get_lower() + other.get_lower();
-    //     let upper = self.get_upper() + other.get_upper();
-    //     Range::with_bounds(lower, upper, RangeType::Regular)
-    // }
 }
-
-// Implement the comparison operators
 pub struct Meet;
 
 impl Meet {
@@ -271,18 +297,16 @@ impl Meet {
         constant_vector: &[T],
         vars: &mut VarNodes<'tcx, T>,
     ) -> bool {
-        // use crate::range_util::{get_first_less_from_vector, get_first_greater_from_vector};
-
-        // assert!(!constant_vector.is_empty(), "Invalid constant vector");
-
         let old_interval = op.get_intersect().get_range().clone();
         let new_interval = op.eval(vars);
+
         let old_lower = old_interval.get_lower();
         let old_upper = old_interval.get_upper();
         let new_lower = new_interval.get_lower();
         let new_upper = new_interval.get_upper();
         let nlconstant = new_lower.clone();
         let nuconstant = new_upper.clone();
+
         let updated = if old_interval.is_unknown() {
             new_interval
         } else if new_lower < old_lower && new_upper > old_upper {
@@ -295,20 +319,17 @@ impl Meet {
             old_interval.clone()
         };
 
+        let sink = op.get_sink().clone();
+
         op.set_intersect(updated.clone());
-        let sink = op.get_sink();
-        let new_sink_interval = op.get_intersect().get_range().clone();
-        vars.get_mut(sink)
-            .unwrap()
-            .set_range(new_sink_interval.clone());
-        rap_trace!(
-            "WIDEN::{:?}: {:?} -> {:?}",
-            sink,
-            old_interval.range,
-            new_sink_interval
-        );
-        old_interval.range != new_sink_interval.range
+
+        vars.get_mut(&sink).unwrap().set_range(updated.clone());
+
+        rap_trace!("WIDEN::{:?}: {:?} -> {:?}", sink, old_interval, updated);
+
+        old_interval != updated
     }
+
     pub fn narrow<'tcx, T: IntervalArithmetic + ConstConvert>(
         op: &mut BasicOpKind<'tcx, T>,
         vars: &mut VarNodes<'tcx, T>,
@@ -332,7 +353,6 @@ impl Meet {
             result_lower = n_lower;
             has_changed = true;
         } else {
-            // let smin = o_lower.clone().min(n_lower.clone());
             let smin = T::min_value();
             if o_lower != smin {
                 result_lower = smin;
@@ -344,7 +364,6 @@ impl Meet {
             result_upper = n_upper;
             has_changed = true;
         } else {
-            // let smax = o_upper.clone().max(n_upper.clone());
             let smax = T::max_value();
             if o_upper != smax {
                 result_upper = smax;
@@ -360,13 +379,6 @@ impl Meet {
             );
             let sink_node = vars.get_mut(op.get_sink()).unwrap();
             sink_node.set_range(new_sink_range.clone());
-
-            // println!(
-            //     "NARROW::{}: {:?} -> {:?}",
-            // ,
-            //     Range::new(o_lower, o_upper),
-            //     new_sink_range
-            // );
         }
 
         has_changed

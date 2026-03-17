@@ -110,8 +110,8 @@ impl IntervalArithmetic for i64 {}
 use rustc_middle::ty::Ty;
 
 // Define the basic operation trait
-pub trait Operation<T: IntervalArithmetic + ConstConvert + Debug> {
-    fn eval(&self) -> Range<T>; // Method to evaluate the range of the operation
+pub trait Operation<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
+    fn eval(&self) -> Range<'tcx, T>; // Method to evaluate the range of the operation
     fn print(&self, os: &mut dyn fmt::Write);
 }
 
@@ -185,7 +185,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> fmt::Display for BasicO
     }
 }
 impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
-    pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<T> {
+    pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<'tcx, T> {
         match self {
             BasicOpKind::Unary(op) => op.eval(),
             BasicOpKind::Binary(op) => op.eval(vars),
@@ -278,7 +278,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicOpKind<'tcx, T> {
             BasicOpKind::Aggregate(op) => op.sink = new_sink,
         }
     }
-    pub fn set_intersect(&mut self, new_intersect: Range<T>) {
+    pub fn set_intersect(&mut self, new_intersect: Range<'tcx, T>) {
         match self {
             BasicOpKind::Unary(op) => op.intersect.set_range(new_intersect),
             BasicOpKind::Binary(op) => op.intersect.set_range(new_intersect),
@@ -373,7 +373,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
         }
     }
 
-    pub fn eval(&self, caller_vars: &VarNodes<'tcx, T>) -> Range<T> {
+    pub fn eval(&self, caller_vars: &VarNodes<'tcx, T>) -> Range<'tcx, T> {
         return Range::default(T::min_value());
     }
     pub fn eval_call(
@@ -381,7 +381,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
         caller_vars: &VarNodes<'tcx, T>,
         cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
         vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
-    ) -> Range<T> {
+    ) -> Range<'tcx, T> {
         match self.fun_path.as_str() {
             "std::iter::IntoIterator::into_iter" => match self.args.first() {
                 Some(Operand::Copy(place)) | Some(Operand::Move(place)) => {
@@ -636,12 +636,12 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> AggregateOp<'tcx, T> {
         }
     }
 
-    pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<T> {
+    pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<'tcx, T> {
         if self.operands.is_empty() {
             return self.intersect.get_range().clone();
         }
 
-        let mut result: Range<T> = Range::default(T::min_value());
+        let mut result: Range<'tcx, T> = Range::default(T::min_value());
         match self.unique_adt {
             0 => {
                 // If unique_adt is 0, we assume it's a regular array or slice.
@@ -718,7 +718,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> UseOp<'tcx, T> {
         }
     }
 
-    pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<T> {
+    pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<'tcx, T> {
         if let Some(source) = self.source {
             let range = vars[source].get_range().clone();
             let mut result = Range::default(T::min_value());
@@ -759,7 +759,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> UnaryOp<'tcx, T> {
         }
     }
 
-    pub fn eval(&self) -> Range<T> {
+    pub fn eval(&self) -> Range<'tcx, T> {
         Range::default(T::min_value())
     }
 }
@@ -793,7 +793,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> EssaOp<'tcx, T> {
         }
     }
 
-    pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<T> {
+    pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<'tcx, T> {
         let source_range = vars[self.source].get_range().clone();
         let result = source_range.intersectwith(self.intersect.get_range());
         rap_trace!(
@@ -865,7 +865,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BinaryOp<'tcx, T> {
         }
     }
 
-    pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<T> {
+    pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<'tcx, T> {
         let op1 = vars[self.source1.unwrap()].get_range().clone();
         let mut op2 = Range::default(T::min_value());
         if let Some(const_value) = &self.const_value {
@@ -931,7 +931,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> PhiOp<'tcx, T> {
     pub fn add_source(&mut self, src: &'tcx Place<'tcx>) {
         self.sources.push(src);
     }
-    pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<T> {
+    pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<'tcx, T> {
         let first = self.sources[0];
         let mut result = vars[first].get_range().clone();
         for &phisource in self.sources.iter() {
@@ -975,7 +975,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> RefOp<'tcx, T> {
         }
     }
 
-    pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<T> {
+    pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<'tcx, T> {
         let var_node = vars.get(self.source);
         rap_trace!("RefOp eval: searching for {:?}\n", var_node);
         if let Some(var_node) = var_node {
@@ -1023,7 +1023,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> ControlDep<'tcx, T> {
         }
     }
 
-    pub fn eval(&self) -> Range<T> {
+    pub fn eval(&self) -> Range<'tcx, T> {
         Range::default(T::min_value())
     }
 }
@@ -1049,18 +1049,17 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> VarNode<'tcx, T> {
         Self {
             v,
             interval: IntervalType::Basic(BasicInterval::new_symb(
-                Range::default(T::min_value()),
                 symb_expr.clone(),
                 symb_expr.clone(),
             )),
             abstract_state: '?',
         }
     }
-    pub fn get_range(&self) -> &Range<T> {
+    pub fn get_range(&self) -> &Range<'tcx, T> {
         self.interval.get_range()
     }
 
-    pub fn set_range(&mut self, new_interval: Range<T>) {
+    pub fn set_range(&mut self, new_interval: Range<'tcx, T>) {
         self.interval.set_range(new_interval);
     }
 

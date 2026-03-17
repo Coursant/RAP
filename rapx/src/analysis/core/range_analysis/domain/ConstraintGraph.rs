@@ -72,7 +72,7 @@ pub struct ConstraintGraph<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     pub worklist: VecDeque<&'tcx Place<'tcx>>,
     pub numAloneSCCs: usize,
     pub numSCCs: usize, // Add a stub for pre_update to resolve the missing method error.
-    pub final_vars: HashMap<Place<'tcx>, HashMap<Place<'tcx>, Range<T>>>,
+    pub final_vars: HashMap<Place<'tcx>, HashMap<Place<'tcx>, Range<'tcx, T>>>,
     pub arg_count: usize,
     pub rerurn_places: HashSet<&'tcx Place<'tcx>>,
     pub switchbbs: HashMap<BasicBlock, (Place<'tcx>, Place<'tcx>)>,
@@ -257,7 +257,7 @@ where
     pub fn build_final_vars(
         &mut self,
         ssa_places_mapping: &HashMap<Place<'tcx>, HashSet<Place<'tcx>>>,
-    ) -> (HashMap<Place<'tcx>, HashMap<Place<'tcx>, Range<T>>>) {
+    ) -> (HashMap<Place<'tcx>, HashMap<Place<'tcx>, Range<'tcx, T>>>) {
         let mut final_vars = HashMap::new();
         for (&_key_place, place_set) in ssa_places_mapping {
             let mut tmp_varnodes = HashMap::new();
@@ -274,7 +274,7 @@ where
     // pub fn filter_final_vars(
     //     vars: &VarNodes<'tcx, T>,
     //     places_map: &HashMap<Place<'tcx>, HashSet<Place<'tcx>>>,
-    // ) -> HashMap<Place<'tcx>, Range<T>> {
+    // ) -> HashMap<Place<'tcx>, Range<'tcx,T>> {
     //     let mut final_vars = HashMap::new();
 
     //     for (&_key_place, place_set) in places_map {
@@ -443,7 +443,7 @@ where
         new_place
     }
     pub fn add_varnode(&mut self, v: &'tcx Place<'tcx>) -> &mut VarNode<'tcx, T> {
-        let local_decls = &self.body.local_decls;
+        let local_decls: &IndexVec<Local, LocalDecl<'tcx>> = &self.body.local_decls;
 
         let node = VarNode::new(v);
         let node_ref: &mut VarNode<'tcx, T> = self
@@ -528,7 +528,9 @@ where
         v: &'tcx Place<'tcx>,
         rvalue: &'tcx Rvalue<'tcx>,
     ) -> &mut VarNode<'tcx, T> {
-        if !self.vars.contains_key(v) {
+        if (!self.vars.contains_key(v))
+        // != (v.local.as_usize() == self.arg_count)
+        {
             let mut place_ctx: Vec<&Place<'tcx>> = self.vars.keys().map(|p| *p).collect();
             let node = VarNode::new_symb(v, SymbExpr::from_rvalue(rvalue, place_ctx.clone()));
             rap_debug!("use node:{:?}", node);
@@ -564,6 +566,74 @@ where
         self.vars.get_mut(v).unwrap()
     }
 
+    fn decode_essa_cmp_op(code: u64) -> Option<BinOp> {
+        match code {
+            1 => Some(BinOp::Lt),
+            2 => Some(BinOp::Le),
+            3 => Some(BinOp::Ge),
+            4 => Some(BinOp::Gt),
+            5 => Some(BinOp::Eq),
+            6 => Some(BinOp::Ne),
+            _ => None,
+        }
+    }
+
+    fn operand_to_u64(op: &Operand<'tcx>) -> Option<u64> {
+        match op {
+            Operand::Constant(c) => c
+                .const_
+                .try_to_scalar_int()
+                .and_then(|s| u64::try_from(s.to_bits(s.size())).ok()),
+            _ => None,
+        }
+    }
+
+    fn extract_essa_syminterval_from_rvalue(
+        &self,
+        rvalue: &'tcx Rvalue<'tcx>,
+    ) -> Option<IntervalType<'tcx, T>> {
+        let (source, cmp_op) = match rvalue {
+            Rvalue::Aggregate(kind, operands) => match **kind {
+                AggregateKind::Adt(def_id, _, _, _, _) if def_id == self.essa => {
+                    if operands.len() < 3 {
+                        return None;
+                    }
+
+                    let source = match &operands[FieldIdx::from_usize(0)] {
+                        Operand::Copy(place) | Operand::Move(place) => place,
+                        _ => return None,
+                    };
+
+                    let cmp_code = Self::operand_to_u64(&operands[FieldIdx::from_usize(2)])?;
+                    let cmp_op = Self::decode_essa_cmp_op(cmp_code)?;
+                    (source, cmp_op)
+                }
+                _ => return None,
+            },
+            _ => return None,
+        };
+
+        let vbm = self.values_branchmap.get(source)?;
+        let t = vbm.get_itv_t();
+        let f = vbm.get_itv_f();
+
+        for interval in [t.clone(), f.clone()] {
+            if let IntervalType::Symb(sym) = &interval {
+                if sym.get_operation() == cmp_op {
+                    return Some(interval);
+                }
+            }
+        }
+
+        for interval in [t, f] {
+            if matches!(interval, IntervalType::Symb(_)) {
+                return Some(interval);
+            }
+        }
+
+        None
+    }
+
     pub fn def_add_varnode_sym(
         &mut self,
         v: &'tcx Place<'tcx>,
@@ -572,7 +642,33 @@ where
         let mut place_ctx: Vec<&Place<'tcx>> = self.vars.keys().map(|p| *p).collect();
 
         let local_decls = &self.body.local_decls;
-        let node = VarNode::new_symb(v, SymbExpr::from_rvalue(rvalue, place_ctx.clone()));
+        let mut node = match rvalue {
+            Rvalue::Aggregate(kind, _) => match **kind {
+                AggregateKind::Adt(def_id, _, _, _, _) if def_id == self.ssa => {
+                    VarNode::new_symb(v, SymbExpr::from_rvalue_ssa(rvalue, place_ctx.clone()))
+                }
+                AggregateKind::Adt(def_id, _, _, _, _) if def_id == self.essa => {
+                    let sym_itv = self.extract_essa_syminterval_from_rvalue(rvalue);
+                    let essa_sym = sym_itv.as_ref().and_then(|itv| {
+                        if let IntervalType::Symb(sym) = itv {
+                            Some((sym.get_bound(), sym.get_operation()))
+                        } else {
+                            None
+                        }
+                    });
+
+                    let mut essa_node = VarNode::new_symb(
+                        v,
+                        SymbExpr::from_rvalue_essa(rvalue, place_ctx.clone(), essa_sym),
+                    );
+                    rap_debug!("essa_node before setting interval: {:?}", essa_node);
+
+                    essa_node
+                }
+                _ => VarNode::new_symb(v, SymbExpr::from_rvalue(rvalue, place_ctx.clone())),
+            },
+            _ => VarNode::new_symb(v, SymbExpr::from_rvalue(rvalue, place_ctx.clone())),
+        };
         rap_debug!("def node:{:?}", node);
         let node_ref: &mut VarNode<'tcx, T> = self
             .vars
@@ -619,16 +715,22 @@ where
         nodes.sort_by(|a, b| a.v.local.as_usize().cmp(&b.v.local.as_usize()));
         for node in nodes {
             if let IntervalType::Basic(basic) = &mut node.interval {
-                rap_debug!("======{}=====", node.v.local.as_usize());
-                rap_debug!("Before resolve: lower_expr: {}\n", basic.lower);
-                basic.lower.resolve_lower_bound(&lookup_context);
-                basic.lower.simplify();
-                rap_debug!("After resolve: lower_expr: {}\n", basic.lower);
-                rap_debug!("Before resolve: upper_expr: {}\n", basic.upper);
-                basic.upper.resolve_upper_bound(&lookup_context);
-                basic.upper.simplify();
+                rap_debug!("======{:?}=====", node.v);
+                rap_debug!(
+                    "Before resolve: lower_expr: {}\n",
+                    basic.range.get_lower_expr()
+                );
+                basic.range.lower_expr.resolve_lower_bound(&lookup_context);
+                basic.range.lower_expr.simplify();
+                rap_debug!("After resolve: lower_expr: {}\n", basic.range.lower_expr);
+                rap_debug!(
+                    "Before resolve: upper_expr: {}\n",
+                    basic.range.get_upper_expr()
+                );
+                basic.range.upper_expr.resolve_lower_bound(&lookup_context);
+                basic.range.upper_expr.simplify();
 
-                rap_debug!("After resolve: upper_expr: {}\n", basic.upper);
+                rap_debug!("After resolve: upper_expr: {}\n", basic.range.upper_expr);
             }
         }
     }
@@ -669,6 +771,7 @@ where
 
     pub fn build_graph(&mut self, body: &'tcx Body<'tcx>) {
         self.arg_count = body.arg_count;
+        rap_debug!("arg_count: {:?}\n", self.arg_count);
         self.build_value_maps(body);
         for block in body.basic_blocks.indices() {
             let block_data: &BasicBlockData<'tcx> = &body[block];
@@ -753,6 +856,7 @@ where
 
         None
     }
+    // ...existing code...
     pub fn build_value_branch_map(
         &mut self,
         body: &'tcx Body<'tcx>,
@@ -766,13 +870,14 @@ where
         let target_data = &body.basic_blocks[first_target];
 
         if let Operand::Copy(place) | Operand::Move(place) = discr {
-            if let Some((op1, op2, cmp_op)) = self.extract_condition(place, block_data) {
+            if let Some((op1, op2, cmp_op)) = Self::extract_condition(place, block_data) {
                 rap_debug!(
                     "extract_condition op1:{:?} op2:{:?} cmp_op:{:?}\n",
                     op1,
                     op2,
                     cmp_op
                 );
+
                 let op1 = if let Some(p1) = op1.place() {
                     self.trace_operand_source(body, switch_block, p1)
                         .unwrap_or(op1)
@@ -786,19 +891,22 @@ where
                 } else {
                     op2
                 };
+
                 rap_debug!(
                     "build_value_branch_map op1:{:?} op2:{:?} cmp_op:{:?}\n",
                     op1,
                     op2,
                     cmp_op
                 );
+
                 let const_op1 = op1.constant();
                 let const_op2 = op2.constant();
+
                 match (const_op1, const_op2) {
                     (Some(c1), Some(c2)) => {}
                     (Some(c), None) | (None, Some(c)) => {
                         let const_in_left: bool;
-                        let variable;
+                        let variable: &'tcx Place<'tcx>;
                         if const_op1.is_some() {
                             const_in_left = true;
                             variable = match op2 {
@@ -812,23 +920,25 @@ where
                                 _ => panic!("Expected a place"),
                             };
                         }
-                        self.add_varnode(variable);
+
+                        // self.add_varnode(variable);
                         rap_trace!("add_vbm_varnode{:?}\n", variable.clone());
 
-                        // let value = c.const_.try_to_scalar_int().unwrap();
                         let value = Self::convert_const(&c.const_).unwrap();
                         let const_range =
                             Range::new(value.clone(), value.clone(), RangeType::Unknown);
+
                         rap_trace!("cmp_op {:?}\n", cmp_op);
                         rap_trace!("const_in_left {:?}\n", const_in_left);
+
                         let mut true_range =
-                            self.apply_comparison(value.clone(), cmp_op, true, const_in_left);
+                            Self::apply_comparison(value.clone(), cmp_op, true, const_in_left);
                         let mut false_range =
-                            self.apply_comparison(value.clone(), cmp_op, false, const_in_left);
+                            Self::apply_comparison(value.clone(), cmp_op, false, const_in_left);
+
                         true_range.set_regular();
                         false_range.set_regular();
-                        // rap_trace!("true_range{:?}\n", true_range);
-                        // rap_trace!("false_range{:?}\n", false_range);
+
                         let target_vec = targets.all_targets();
 
                         let vbm = ValueBranchMap::new(
@@ -838,8 +948,8 @@ where
                             IntervalType::Basic(BasicInterval::new(false_range)),
                             IntervalType::Basic(BasicInterval::new(true_range)),
                         );
+
                         self.values_branchmap.insert(variable, vbm);
-                        // self.switchbbs.insert(block, (place, variable));
                     }
                     (None, None) => {
                         let CR = Range::new(T::min_value(), T::max_value(), RangeType::Unknown);
@@ -853,10 +963,10 @@ where
                             _ => panic!("Expected a place"),
                         };
                         let target_vec = targets.all_targets();
-                        self.add_varnode(&p1);
+                        // self.add_varnode(&p1);
                         rap_trace!("add_vbm_varnode{:?}\n", p1.clone());
 
-                        self.add_varnode(&p2);
+                        // self.add_varnode(&p2);
                         rap_trace!("add_vbm_varnode{:?}\n", p2.clone());
                         let flipped_cmp_op = Self::flipped_binop(cmp_op).unwrap();
                         let reversed_cmp_op = Self::reverse_binop(cmp_op).unwrap();
@@ -926,8 +1036,8 @@ where
             }
         })
     }
+
     fn extract_condition(
-        &mut self,
         place: &'tcx Place<'tcx>,
         switch_block: &'tcx BasicBlockData<'tcx>,
     ) -> Option<(&'tcx Operand<'tcx>, &'tcx Operand<'tcx>, BinOp)> {
@@ -938,29 +1048,6 @@ where
                 if lhs == place {
                     let mut return_op1: &Operand<'tcx> = &op1;
                     let mut return_op2: &Operand<'tcx> = &op2;
-                    // for stmt_original in &switch_block.statements {
-                    //     if op1.constant().is_none() {
-                    //         if let StatementKind::Assign(box (lhs, Rvalue::Use(OP1))) =
-                    //             &stmt_original.kind
-                    //         {
-                    //             if lhs.clone() == op1.place().unwrap() {
-                    //                 return_op1 = OP1;
-                    //             }
-                    //         }
-                    //     }
-                    // }
-                    // if op2.constant().is_none() {
-                    //     for stmt_original in &switch_block.statements {
-                    //         if let StatementKind::Assign(box (lhs, Rvalue::Use(OP2))) =
-                    //             &stmt_original.kind
-                    //         {
-                    //             if lhs.clone() == op2.place().unwrap() {
-                    //                 return_op2 = OP2;
-                    //             }
-                    //         }
-                    //     }
-                    // }
-
                     return Some((return_op1, return_op2, *bin_op));
                 }
             }
@@ -969,12 +1056,11 @@ where
     }
 
     fn apply_comparison<U: IntervalArithmetic>(
-        &self,
         constant: U,
         cmp_op: BinOp,
         is_true_branch: bool,
         const_in_left: bool,
-    ) -> Range<U> {
+    ) -> Range<'tcx, U> {
         match cmp_op {
             BinOp::Lt => {
                 if is_true_branch ^ const_in_left {
@@ -1019,7 +1105,7 @@ where
             _ => Range::new(constant.clone(), constant.clone(), RangeType::Empty),
         }
     }
-
+    // ...existing code...
     fn build_value_goto_map(&self, block_index: BasicBlock, target: BasicBlock) {
         rap_trace!(
             "Building value map for Goto in block {:?} targeting block {:?}",
@@ -1368,7 +1454,7 @@ where
                     rap_debug!("add_return_place{:?}\n", place);
                 } else {
                     self.use_add_varnode_sym(place, rvalue);
-                    rap_trace!("addvar_in_use_op{:?}\n", place);
+                    rap_debug!("addvar_in_use_op{:?}\n", place);
                     let sink_node = self.def_add_varnode_sym(sink, rvalue);
                     let useop = UseOp::new(IntervalType::Basic(BI), sink, inst, Some(place), None);
                     // Insert the operation in the graph.
