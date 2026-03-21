@@ -34,6 +34,7 @@ use analysis::{
     core::{
         alias_analysis::{AliasAnalysis, FnAliasMapWrapper, default::AliasAnalyzer},
         api_dependency::ApiDependencyAnalyzer,
+        bounds_check_info::BoundsCheckAnalyzer,
         callgraph::{CallGraphAnalysis, FnCallDisplay, default::CallGraphAnalyzer},
         dataflow::{
             Arg2RetMapWrapper, DataFlowAnalysis, DataFlowGraphMapWrapper, default::DataFlowAnalyzer,
@@ -80,6 +81,7 @@ pub struct RapCallback {
     alias: bool,
     alias_mfp: bool,
     api_dependency: bool,
+    bounds_check_info: bool,
     callgraph: bool,
     dataflow: usize,
     ownedheap: bool,
@@ -106,6 +108,7 @@ impl Default for RapCallback {
             alias: false,
             alias_mfp: false,
             api_dependency: false,
+            bounds_check_info: false,
             callgraph: false,
             dataflow: 0,
             ownedheap: false,
@@ -238,6 +241,16 @@ impl RapCallback {
     /// Test if API-dependency graph generation is enabled.
     pub fn is_api_dependency_enabled(&self) -> bool {
         self.api_dependency
+    }
+
+    /// Enable bounds-check database collection.
+    pub fn enable_bounds_check_info(&mut self) {
+        self.bounds_check_info = true;
+    }
+
+    /// Test if bounds-check database collection is enabled.
+    pub fn is_bounds_check_info_enabled(&self) -> bool {
+        self.bounds_check_info
     }
 
     /// Enable call-graph analysis.
@@ -464,6 +477,16 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
             },
         );
         analyzer.run();
+    }
+
+    if callback.is_bounds_check_info_enabled() {
+        let mut analyzer = BoundsCheckAnalyzer::new(tcx);
+        analyzer.run();
+        let path = "bounds_check_db.json";
+        match analyzer.dump_to_json(path) {
+            Ok(()) => rap_info!("Bounds-check database written to {}", path),
+            Err(e) => rap_warn!("Failed to write bounds-check database: {}", e),
+        }
     }
 
     if callback.is_callgraph_enabled() {

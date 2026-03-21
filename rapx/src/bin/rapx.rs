@@ -54,6 +54,7 @@ fn main() {
             "-opt=all" => compiler.enable_opt(2),
             "-opt=report" => compiler.enable_opt(0),
             "-scan" => compiler.enable_scan(),
+            "-bcdb" => compiler.enable_bounds_check_info(),
             "-ssa" => compiler.enable_ssa_transform(),
             "-upg" => compiler.enable_upg(1),
             "-upg-std" => compiler.enable_upg(2),

@@ -521,3 +521,10 @@ fn test_symbolic_interval() {
         );
     }
 }
+
+// ================Bounds Check Database Test=====================
+#[test]
+fn test_bounds_check_db() {
+    let output = running_tests_with_arg("bounds_check", "-bcdb");
+    assert!(output.contains("Bounds-check database written to bounds_check_db.json"));
+}
