@@ -75,6 +75,15 @@ e.g.
    cargo rapx -F -M -- --tests
 3. detect use-after-free and memory leak for all members:
    cargo rapx -F -M -- --workspace
+4. detect optimization opportunities from unnecessary bounds checking:
+   ```rust
+   fn foo(mut a: Vec<i32>) {
+       for i in 0..a.len() {
+           a[i] = a[i] + 1;
+       }
+   }
+   ```
+   Run `cargo rapx -O` in this crate and RAPx reports `Unnecessary bounds checkings detected`.
 
 Environment Variables (Values are case insensitive):
     RAP_LOG          verbosity of logging: trace, debug, info, warn
@@ -110,5 +119,4 @@ For `RAP_RECURSIVE`:
 * deep: check for all workspaces from current folder
  
 NOTE: rapx will enter each member folder to do the check.
-
 
