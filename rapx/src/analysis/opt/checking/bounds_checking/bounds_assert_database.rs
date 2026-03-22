@@ -2,10 +2,14 @@ use std::{collections::HashMap, fs::File, path::Path};
 
 use serde::Serialize;
 
-use rustc_hir::{Safety, def::DefKind};
+use rustc_hir::{
+    Block, BlockCheckMode, Safety, UnsafeSource,
+    def::DefKind,
+    intravisit,
+};
 use rustc_middle::{
     mir::{AssertKind, Body, Operand, TerminatorKind},
-    ty::TyCtxt,
+    ty::{Ty, TyCtxt, TyKind},
 };
 
 use crate::analysis::{
@@ -121,12 +125,12 @@ fn collect_bounds_checks_in_body<'tcx>(
                         file,
                         line,
                         mir_bb: format!("{:?}", bb_idx),
-                        statement_idx: 0,
+                        statement_idx: body.basic_blocks[bb_idx].statements.len(),
                     },
                     symbolic_features: SymbolicFeatures {
                         index_expr: format!("{index:?}"),
                         len_expr: format!("{len:?}"),
-                        ty: infer_bounds_type(body, len, index),
+                        ty: infer_bounds_type(tcx, body, len, index),
                     },
                     function_context: FunctionContext {
                         name: function_name.clone(),
@@ -140,22 +144,43 @@ fn collect_bounds_checks_in_body<'tcx>(
     }
 }
 
-fn infer_bounds_type(body: &Body<'_>, len: &Operand<'_>, index: &Operand<'_>) -> String {
-    let ty = match (len, index) {
-        (Operand::Copy(place), _) | (Operand::Move(place), _) => {
-            body.local_decls[place.local].ty.to_string()
-        }
-        (_, Operand::Copy(place)) | (_, Operand::Move(place)) => {
-            body.local_decls[place.local].ty.to_string()
-        }
-        _ => return "Unknown".to_string(),
-    };
-    if ty.contains("slice") || ty.contains('[') {
+fn infer_bounds_type<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    len: &Operand<'tcx>,
+    index: &Operand<'tcx>,
+) -> String {
+    let mut kinds = vec![];
+    if let Operand::Copy(place) | Operand::Move(place) = len {
+        kinds.push(classify_bounds_ty(tcx, body.local_decls[place.local].ty));
+    }
+    if let Operand::Copy(place) | Operand::Move(place) = index {
+        kinds.push(classify_bounds_ty(tcx, body.local_decls[place.local].ty));
+    }
+    if kinds.iter().any(|k| k == "Slice") {
         "Slice".to_string()
-    } else if ty.contains("Vec") {
+    } else if kinds.iter().any(|k| k == "Vec") {
         "Vec".to_string()
     } else {
-        ty
+        kinds
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "Unknown".to_string())
+    }
+}
+
+fn classify_bounds_ty(tcx: TyCtxt<'_>, ty: Ty<'_>) -> String {
+    match ty.kind() {
+        TyKind::Slice(_) | TyKind::Array(_, _) | TyKind::Str => "Slice".to_string(),
+        TyKind::Adt(adt, _) => {
+            let path = tcx.def_path_str(adt.did());
+            if path == "alloc::vec::Vec" || path == "std::vec::Vec" {
+                "Vec".to_string()
+            } else {
+                ty.to_string()
+            }
+        }
+        _ => ty.to_string(),
     }
 }
 
@@ -168,14 +193,52 @@ fn build_callers<'tcx>(
         .get(&def_id)
         .map(|v| {
             v.iter()
-                .map(|(caller, _)| CallerInfo {
+                .map(|(caller, terminator)| CallerInfo {
                     name: tcx.def_path_str(*caller),
                     caller_is_unsafe: check_safety(tcx, *caller) == Safety::Unsafe,
-                    call_site_in_unsafe_block: false,
+                    call_site_in_unsafe_block: terminator
+                        .map(|term| {
+                            is_call_site_in_unsafe_block(tcx, *caller, term.source_info.span)
+                        })
+                        .unwrap_or(false),
                 })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+struct UnsafeBlockFinder {
+    spans: Vec<rustc_span::Span>,
+}
+
+impl<'tcx> intravisit::Visitor<'tcx> for UnsafeBlockFinder {
+    fn visit_block(&mut self, block: &'tcx Block<'tcx>) {
+        if let BlockCheckMode::UnsafeBlock(UnsafeSource::UserProvided) = block.rules {
+            self.spans.push(block.span);
+        }
+        intravisit::walk_block(self, block);
+    }
+}
+
+fn is_call_site_in_unsafe_block(
+    tcx: TyCtxt<'_>,
+    caller_def_id: rustc_hir::def_id::DefId,
+    call_span: rustc_span::Span,
+) -> bool {
+    let Some(local_def_id) = caller_def_id.as_local() else {
+        return false;
+    };
+    let body = tcx.hir_body_owned_by(local_def_id);
+    let mut finder = UnsafeBlockFinder { spans: vec![] };
+    intravisit::walk_body(&mut finder, body);
+    finder
+        .spans
+        .into_iter()
+        .any(|unsafe_span| span_contains(unsafe_span, call_span))
+}
+
+fn span_contains(outer: rustc_span::Span, inner: rustc_span::Span) -> bool {
+    outer.lo() <= inner.lo() && inner.hi() <= outer.hi()
 }
 
 #[cfg(test)]
