@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    env,
     fs::{self, File},
     path::{Path, PathBuf},
     process::Command,
@@ -248,12 +249,13 @@ fn span_contains(outer: rustc_span::Span, inner: rustc_span::Span) -> bool {
 }
 
 fn build_llvm_reserved_from_release_asm(records: &[BoundsCheckRecord]) -> serde_json::Value {
+    const BOUNDS_PANIC_SYMBOLS: [&str; 2] = ["panic_bounds_check", "slice_index_len_fail"];
     match generate_release_llvm_ir_in_current_crate()
         .and_then(|_| find_release_llvm_ir_files())
-        .and_then(extract_retained_bounds_lines_from_llvm_ir_files)
+        .and_then(|files| extract_retained_bounds_lines_from_llvm_ir_files(files, &BOUNDS_PANIC_SYMBOLS))
     {
         Ok(retained_lines) => {
-            let records = records
+            let llvm_records = records
                 .iter()
                 .map(|r| {
                     let retained_by_llvm = retained_lines.contains(&r.location.line);
@@ -267,7 +269,7 @@ fn build_llvm_reserved_from_release_asm(records: &[BoundsCheckRecord]) -> serde_
                 .collect::<Vec<_>>();
             serde_json::json!({
                 "analysis": "llvm-ir-release",
-                "records": records
+                "records": llvm_records
             })
         }
         Err(err) => serde_json::json!({
@@ -283,8 +285,7 @@ fn generate_release_llvm_ir_in_current_crate() -> std::io::Result<()> {
         .arg("rustc")
         .arg("--release")
         .arg("--")
-        .arg("-C")
-        .arg("debuginfo=1")
+        .arg("-Cdebuginfo=1")
         .arg("--emit=llvm-ir")
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RAP_ARGS")
@@ -292,14 +293,15 @@ fn generate_release_llvm_ir_in_current_crate() -> std::io::Result<()> {
     if status.success() {
         Ok(())
     } else {
-        Err(std::io::Error::other(
-            "cargo rustc --release -- -C debuginfo=1 --emit=llvm-ir failed",
-        ))
+        Err(std::io::Error::other(format!(
+            "cargo rustc --release -- -Cdebuginfo=1 --emit=llvm-ir failed with status: {status}"
+        )))
     }
 }
 
 fn find_release_llvm_ir_files() -> std::io::Result<Vec<PathBuf>> {
-    let deps_dir = Path::new("target").join("release").join("deps");
+    let target_dir = env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
+    let deps_dir = Path::new(&target_dir).join("release").join("deps");
     let mut files = vec![];
     for entry in fs::read_dir(deps_dir)? {
         let entry = entry?;
@@ -320,16 +322,23 @@ fn find_release_llvm_ir_files() -> std::io::Result<Vec<PathBuf>> {
 
 fn extract_retained_bounds_lines_from_llvm_ir_files(
     llvm_ir_files: Vec<PathBuf>,
+    panic_patterns: &[&str],
 ) -> std::io::Result<HashSet<usize>> {
     let mut retained_lines = HashSet::new();
     for path in llvm_ir_files {
         let content = fs::read_to_string(path)?;
-        retained_lines.extend(extract_retained_bounds_lines_from_llvm_ir(&content));
+        retained_lines.extend(extract_retained_bounds_lines_from_llvm_ir(
+            &content,
+            panic_patterns,
+        ));
     }
     Ok(retained_lines)
 }
 
-fn extract_retained_bounds_lines_from_llvm_ir(llvm_ir: &str) -> HashSet<usize> {
+fn extract_retained_bounds_lines_from_llvm_ir(
+    llvm_ir: &str,
+    panic_patterns: &[&str],
+) -> HashSet<usize> {
     let mut dbg_to_line = HashMap::new();
     for line in llvm_ir.lines() {
         if let Some((dbg_id, line_no)) = parse_dilocation_line(line) {
@@ -339,7 +348,7 @@ fn extract_retained_bounds_lines_from_llvm_ir(llvm_ir: &str) -> HashSet<usize> {
 
     let mut retained_lines = HashSet::new();
     for line in llvm_ir.lines() {
-        if !(line.contains("panic_bounds_check") || line.contains("slice_index_len_fail")) {
+        if !panic_patterns.iter().any(|pattern| line.contains(pattern)) {
             continue;
         }
         if let Some(dbg_id) = parse_dbg_id(line) {
@@ -351,6 +360,7 @@ fn extract_retained_bounds_lines_from_llvm_ir(llvm_ir: &str) -> HashSet<usize> {
     retained_lines
 }
 
+/// Extracts debug metadata id `N` from LLVM instruction fragments like `..., !dbg !N`.
 fn parse_dbg_id(line: &str) -> Option<usize> {
     let needle = "!dbg !";
     let idx = line.find(needle)?;
@@ -362,6 +372,8 @@ fn parse_dbg_id(line: &str) -> Option<usize> {
         .ok()
 }
 
+/// Parses LLVM metadata lines like `!42 = !DILocation(line: 123, column: 9, scope: !1)`
+/// into `(42, 123)`.
 fn parse_dilocation_line(line: &str) -> Option<(usize, usize)> {
     if !line.starts_with('!') || !line.contains("!DILocation(") || !line.contains("line: ") {
         return None;
@@ -411,7 +423,8 @@ start:
 }
 !42 = !DILocation(line: 123, column: 9, scope: !1)
 "#;
-        let retained = extract_retained_bounds_lines_from_llvm_ir(ir);
+        let retained =
+            extract_retained_bounds_lines_from_llvm_ir(ir, &["panic_bounds_check"]);
         assert!(retained.contains(&123));
     }
 
@@ -424,7 +437,8 @@ start:
   ret void
 }
 "#;
-        let retained = extract_retained_bounds_lines_from_llvm_ir(ir);
+        let retained =
+            extract_retained_bounds_lines_from_llvm_ir(ir, &["panic_bounds_check"]);
         assert!(retained.is_empty());
     }
 }
