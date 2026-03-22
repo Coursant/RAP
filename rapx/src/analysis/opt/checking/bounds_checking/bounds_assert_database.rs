@@ -281,7 +281,7 @@ fn build_llvm_reserved_from_release_asm(records: &[BoundsCheckRecord]) -> serde_
 }
 
 fn generate_release_llvm_ir_in_current_crate() -> std::io::Result<()> {
-    let status = Command::new("cargo")
+    let output = Command::new("cargo")
         .arg("rustc")
         .arg("--release")
         .arg("--")
@@ -289,19 +289,33 @@ fn generate_release_llvm_ir_in_current_crate() -> std::io::Result<()> {
         .arg("--emit=llvm-ir")
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RAP_ARGS")
-        .status()?;
-    if status.success() {
+        .output()?;
+    if output.status.success() {
         Ok(())
     } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr_tail: String = stderr
+            .lines()
+            .rev()
+            .take(10)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
         Err(std::io::Error::other(format!(
-            "cargo rustc --release -- -Cdebuginfo=1 --emit=llvm-ir failed with status: {status}"
+            "cargo rustc --release -- -Cdebuginfo=1 --emit=llvm-ir failed with status: {}. stderr:\n{}",
+            output.status, stderr_tail
         )))
     }
 }
 
 fn find_release_llvm_ir_files() -> std::io::Result<Vec<PathBuf>> {
-    let target_dir = env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
-    let deps_dir = Path::new(&target_dir).join("release").join("deps");
+    let target_dir = match env::var("CARGO_TARGET_DIR") {
+        Ok(v) => PathBuf::from(v),
+        Err(_) => env::current_dir()?.join("target"),
+    };
+    let deps_dir = target_dir.join("release").join("deps");
     let mut files = vec![];
     for entry in fs::read_dir(deps_dir)? {
         let entry = entry?;
@@ -351,7 +365,7 @@ fn extract_retained_bounds_lines_from_llvm_ir(
         if !panic_patterns.iter().any(|pattern| line.contains(pattern)) {
             continue;
         }
-        if let Some(dbg_id) = parse_dbg_id(line) {
+        for dbg_id in parse_dbg_ids(line) {
             if let Some(line_no) = dbg_to_line.get(&dbg_id) {
                 retained_lines.insert(*line_no);
             }
@@ -360,22 +374,32 @@ fn extract_retained_bounds_lines_from_llvm_ir(
     retained_lines
 }
 
-/// Extracts debug metadata id `N` from LLVM instruction fragments like `..., !dbg !N`.
-fn parse_dbg_id(line: &str) -> Option<usize> {
+/// Extracts all debug metadata ids `N` from LLVM instruction fragments like `..., !dbg !N`.
+fn parse_dbg_ids(line: &str) -> Vec<usize> {
     let needle = "!dbg !";
-    let idx = line.find(needle)?;
-    line[idx + needle.len()..]
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect::<String>()
-        .parse()
-        .ok()
+    let mut ids = Vec::new();
+    let mut start = 0;
+    while let Some(found) = line[start..].find(needle) {
+        let idx = start + found + needle.len();
+        let digits = line[idx..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>();
+        if let Ok(id) = digits.parse::<usize>() {
+            ids.push(id);
+        }
+        start = idx;
+    }
+    ids
 }
 
 /// Parses LLVM metadata lines like `!42 = !DILocation(line: 123, column: 9, scope: !1)`
 /// into `(42, 123)`.
 fn parse_dilocation_line(line: &str) -> Option<(usize, usize)> {
-    if !line.starts_with('!') || !line.contains("!DILocation(") || !line.contains("line: ") {
+    if !line.starts_with('!')
+        || !line.contains(" = !DILocation(")
+        || !line.contains("!DILocation(line: ")
+    {
         return None;
     }
     let dbg_id = line
