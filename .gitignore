@@ -7,3 +7,4 @@ tests/**/Cargo.lock
 **/*.dot
 **/*.png
 **/bounds_check_db.json
+**/crate_db.json
