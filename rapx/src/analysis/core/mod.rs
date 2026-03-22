@@ -1,6 +1,8 @@
 pub mod alias_analysis;
 pub mod api_dependency;
+pub mod bounds_check_info;
 pub mod callgraph;
+pub mod crate_info;
 pub mod dataflow;
 pub mod ownedheap_analysis;
 pub mod range_analysis;

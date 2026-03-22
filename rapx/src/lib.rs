@@ -34,7 +34,9 @@ use analysis::{
     core::{
         alias_analysis::{AliasAnalysis, FnAliasMapWrapper, default::AliasAnalyzer},
         api_dependency::ApiDependencyAnalyzer,
+        bounds_check_info::BoundsCheckAnalyzer,
         callgraph::{CallGraphAnalysis, FnCallDisplay, default::CallGraphAnalyzer},
+        crate_info::CrateInfoAnalyzer,
         dataflow::{
             Arg2RetMapWrapper, DataFlowAnalysis, DataFlowGraphMapWrapper, default::DataFlowAnalyzer,
         },
@@ -80,7 +82,9 @@ pub struct RapCallback {
     alias: bool,
     alias_mfp: bool,
     api_dependency: bool,
+    bounds_check_info: bool,
     callgraph: bool,
+    crate_info: bool,
     dataflow: usize,
     ownedheap: bool,
     range: usize,
@@ -106,7 +110,9 @@ impl Default for RapCallback {
             alias: false,
             alias_mfp: false,
             api_dependency: false,
+            bounds_check_info: false,
             callgraph: false,
+            crate_info: false,
             dataflow: 0,
             ownedheap: false,
             range: 0,
@@ -240,6 +246,16 @@ impl RapCallback {
         self.api_dependency
     }
 
+    /// Enable bounds-check database collection.
+    pub fn enable_bounds_check_info(&mut self) {
+        self.bounds_check_info = true;
+    }
+
+    /// Test if bounds-check database collection is enabled.
+    pub fn is_bounds_check_info_enabled(&self) -> bool {
+        self.bounds_check_info
+    }
+
     /// Enable call-graph analysis.
     pub fn enable_callgraph(&mut self) {
         self.callgraph = true;
@@ -248,6 +264,16 @@ impl RapCallback {
     /// Test if call-graph analysis is enabled.
     pub fn is_callgraph_enabled(&self) -> bool {
         self.callgraph
+    }
+
+    /// Enable crate-level information database collection.
+    pub fn enable_crate_info(&mut self) {
+        self.crate_info = true;
+    }
+
+    /// Test if crate-level information database collection is enabled.
+    pub fn is_crate_info_enabled(&self) -> bool {
+        self.crate_info
     }
 
     /// Enable owned heap analysis.
@@ -466,6 +492,16 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
         analyzer.run();
     }
 
+    if callback.is_bounds_check_info_enabled() {
+        let mut analyzer = BoundsCheckAnalyzer::new(tcx);
+        analyzer.run();
+        let path = "bounds_check_db.json";
+        match analyzer.dump_to_json(path) {
+            Ok(()) => rap_info!("Bounds-check database written to {}", path),
+            Err(e) => rap_warn!("Failed to write bounds-check database: {}", e),
+        }
+    }
+
     if callback.is_callgraph_enabled() {
         let mut analyzer = CallGraphAnalyzer::new(tcx);
         analyzer.run();
@@ -478,6 +514,16 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
             }
         );
         //analyzer.display();
+    }
+
+    if callback.is_crate_info_enabled() {
+        let mut analyzer = CrateInfoAnalyzer::new(tcx);
+        analyzer.run();
+        let path = "crate_db.json";
+        match analyzer.dump_to_json(path) {
+            Ok(()) => rap_info!("Crate database written to {}", path),
+            Err(e) => rap_warn!("Failed to write crate database: {}", e),
+        }
     }
 
     match callback.is_dataflow_enabled() {
