@@ -1,5 +1,16 @@
 //! A comprehensive taxonomy of Bounds Check Elimination (BCE) patterns in Rust.
 //! This file is designed for empirical analysis using LLVM IR and Assembly emission.
+//!
+//! How to verify whether a bounds check is eliminated by LLVM (release only):
+//! 1. Build this crate with release optimization and emit LLVM IR:
+//!    `cargo rustc --release --lib -- --emit=llvm-ir`
+//! 2. Open `target/release/deps/*.ll`, locate the target function (we use
+//!    `#[no_mangle]` below to make function names easy to find).
+//! 3. If that function body no longer contains a call path to
+//!    `panic_bounds_check`/`panic_bounds_check`-related symbols, the bounds check
+//!    is eliminated; if such panic path is still present, the check is retained.
+//! 4. Always judge based on release artifacts: debug builds intentionally retain
+//!    many checks and are not suitable for BCE conclusions.
 
 // ============================================================================
 // Category 1: Static Elimination via LLVM Passes (BCE Success)
