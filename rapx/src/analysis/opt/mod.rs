@@ -4,10 +4,12 @@ pub mod iterator;
 pub mod memory_cloning;
 
 use rustc_middle::ty::TyCtxt;
+use rustc_hir::def_id::LOCAL_CRATE;
 
 use crate::utils::log::span_to_source_code;
 
 use super::core::dataflow::{default::DataFlowAnalyzer, graph::Graph};
+use checking::bounds_checking::bounds_assert_database::dump_bounds_assert_database;
 use checking::bounds_checking::BoundsCheck;
 use checking::encoding_checking::EncodingCheck;
 use data_collection::initialization::InitializationCheck;
@@ -62,6 +64,18 @@ impl<'tcx> Opt<'tcx> {
         if !self.has_crate("core") {
             //core it self
             return;
+        }
+
+        let crate_name = self.tcx.crate_name(LOCAL_CRATE);
+        let bounds_db_path = format!("bounds_checks_{}.json", crate_name.as_str());
+        if let Err(err) = dump_bounds_assert_database(self.tcx, &bounds_db_path) {
+            rap_warn!(
+                "Failed to dump bounds-check assert database to {}: {}",
+                bounds_db_path,
+                err
+            );
+        } else {
+            rap_info!("Dump bounds-check assert database to {}", bounds_db_path);
         }
 
         let mut statistics = vec![0 as usize; 6];
