@@ -59,6 +59,7 @@ Analysis:
     -ownedheap      analyze if the type holds a piece of memory on heap
     -pathcond       extract path constraints
     -range          perform range analysis
+    -bcdb           dump MIR-level bounds-check database to bounds_check_db.json
 
 General command: 
     -help           show help information
@@ -111,4 +112,24 @@ For `RAP_RECURSIVE`:
  
 NOTE: rapx will enter each member folder to do the check.
 
+## 如何判断 bounds check 是否被 LLVM 消除（Release 优化级别）
+
+可以用“**MIR 基线 + Release LLVM IR 对比**”的方法：
+
+1. 先导出 MIR 层面的边界检查（基线）：
+   ```shell
+   cargo +nightly-2025-12-06 rapx -bcdb
+   ```
+   这会生成 `bounds_check_db.json`，记录在 MIR 中出现的 bounds check。
+
+2. 再用 release 级别编译并导出 LLVM IR：
+   ```shell
+   RUSTFLAGS="--emit=llvm-ir" cargo +nightly-2025-12-06 build --release
+   ```
+
+3. 对比两边结果：
+   - 如果某条检查在 `bounds_check_db.json` 中存在，但在 release 产物对应的 LLVM IR 中不再出现，说明它被 LLVM 在优化阶段消除了。
+   - 如果仍然存在，则说明该检查在该优化级别下未被消除。
+
+简而言之：`-bcdb` 提供“优化前（MIR）”视角，`--release` 下的 LLVM IR 提供“优化后（LLVM）”视角，二者差异就是被消除的 bounds check。
 
