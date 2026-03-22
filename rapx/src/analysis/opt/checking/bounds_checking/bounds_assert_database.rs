@@ -1,4 +1,9 @@
-use std::{collections::HashMap, fs::File, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    fs::{self, File},
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use serde::Serialize;
 
@@ -91,10 +96,11 @@ pub fn dump_bounds_assert_database<'tcx>(
         collect_bounds_checks_in_body(tcx, body, &callers_map, &mut all_records);
     }
 
+    let llvm_reserved = build_llvm_reserved_from_release_asm(&all_records);
     let db = BoundsChecksDatabase {
         bounds_checks: all_records,
         llvm: LlvmReserved {
-            reserved: serde_json::json!({}),
+            reserved: llvm_reserved,
         },
     };
     let file = File::create(path)?;
@@ -241,6 +247,142 @@ fn span_contains(outer: rustc_span::Span, inner: rustc_span::Span) -> bool {
     outer.lo() <= inner.lo() && inner.hi() <= outer.hi()
 }
 
+fn build_llvm_reserved_from_release_asm(records: &[BoundsCheckRecord]) -> serde_json::Value {
+    match generate_release_llvm_ir_in_current_crate()
+        .and_then(|_| find_release_llvm_ir_files())
+        .and_then(extract_retained_bounds_lines_from_llvm_ir_files)
+    {
+        Ok(retained_lines) => {
+            let records = records
+                .iter()
+                .map(|r| {
+                    let retained_by_llvm = retained_lines.contains(&r.location.line);
+                    serde_json::json!({
+                        "file": r.location.file,
+                        "line": r.location.line,
+                        "function": r.function_context.name,
+                        "retained": retained_by_llvm
+                    })
+                })
+                .collect::<Vec<_>>();
+            serde_json::json!({
+                "analysis": "llvm-ir-release",
+                "records": records
+            })
+        }
+        Err(err) => serde_json::json!({
+            "analysis": "llvm-ir-release",
+            "error": err.to_string(),
+            "records": []
+        }),
+    }
+}
+
+fn generate_release_llvm_ir_in_current_crate() -> std::io::Result<()> {
+    let status = Command::new("cargo")
+        .arg("rustc")
+        .arg("--release")
+        .arg("--")
+        .arg("-C")
+        .arg("debuginfo=1")
+        .arg("--emit=llvm-ir")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RAP_ARGS")
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(
+            "cargo rustc --release -- -C debuginfo=1 --emit=llvm-ir failed",
+        ))
+    }
+}
+
+fn find_release_llvm_ir_files() -> std::io::Result<Vec<PathBuf>> {
+    let deps_dir = Path::new("target").join("release").join("deps");
+    let mut files = vec![];
+    for entry in fs::read_dir(deps_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("ll") {
+            files.push(path);
+        }
+    }
+    if files.is_empty() {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no LLVM IR (*.ll) files found in target/release/deps",
+        ))
+    } else {
+        Ok(files)
+    }
+}
+
+fn extract_retained_bounds_lines_from_llvm_ir_files(
+    llvm_ir_files: Vec<PathBuf>,
+) -> std::io::Result<HashSet<usize>> {
+    let mut retained_lines = HashSet::new();
+    for path in llvm_ir_files {
+        let content = fs::read_to_string(path)?;
+        retained_lines.extend(extract_retained_bounds_lines_from_llvm_ir(&content));
+    }
+    Ok(retained_lines)
+}
+
+fn extract_retained_bounds_lines_from_llvm_ir(llvm_ir: &str) -> HashSet<usize> {
+    let mut dbg_to_line = HashMap::new();
+    for line in llvm_ir.lines() {
+        if let Some((dbg_id, line_no)) = parse_dilocation_line(line) {
+            dbg_to_line.insert(dbg_id, line_no);
+        }
+    }
+
+    let mut retained_lines = HashSet::new();
+    for line in llvm_ir.lines() {
+        if !(line.contains("panic_bounds_check") || line.contains("slice_index_len_fail")) {
+            continue;
+        }
+        if let Some(dbg_id) = parse_dbg_id(line) {
+            if let Some(line_no) = dbg_to_line.get(&dbg_id) {
+                retained_lines.insert(*line_no);
+            }
+        }
+    }
+    retained_lines
+}
+
+fn parse_dbg_id(line: &str) -> Option<usize> {
+    let needle = "!dbg !";
+    let idx = line.find(needle)?;
+    line[idx + needle.len()..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .ok()
+}
+
+fn parse_dilocation_line(line: &str) -> Option<(usize, usize)> {
+    if !line.starts_with('!') || !line.contains("!DILocation(") || !line.contains("line: ") {
+        return None;
+    }
+    let dbg_id = line
+        .strip_prefix('!')?
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .ok()?;
+    let line_pos = line.find("line: ")? + "line: ".len();
+    let line_no = line[line_pos..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .ok()?;
+    Some((dbg_id, line_no))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,5 +399,32 @@ mod tests {
         assert!(v.get("bounds_checks").is_some());
         assert!(v.get("llvm").is_some());
         assert_eq!(v["bounds_checks"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn extract_retained_lines_from_llvm_ir_with_dbg_locations() {
+        let ir = r#"
+define void @f() {
+start:
+  tail call void @_RNvNtCs5a6mc0wissE_4core9panicking18panic_bounds_check(i64 noundef 1, i64 noundef 2, ptr %x), !dbg !42
+  ret void
+}
+!42 = !DILocation(line: 123, column: 9, scope: !1)
+"#;
+        let retained = extract_retained_bounds_lines_from_llvm_ir(ir);
+        assert!(retained.contains(&123));
+    }
+
+    #[test]
+    fn extract_retained_lines_from_llvm_ir_without_dbg_is_empty() {
+        let ir = r#"
+define void @f() {
+start:
+  tail call void @_RNvNtCs5a6mc0wissE_4core9panicking18panic_bounds_check(i64 noundef 1, i64 noundef 2, ptr %x)
+  ret void
+}
+"#;
+        let retained = extract_retained_bounds_lines_from_llvm_ir(ir);
+        assert!(retained.is_empty());
     }
 }
