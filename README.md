@@ -130,6 +130,7 @@ What it does:
 4. Builds `bc_dataset.jsonl` where each record contains:
    - one BC entry (`bc`)
    - the corresponding LLVM reserved marker (`llvm_reserved`)
+   - match status (`llvm_reserved_matched`, unmatched rows keep `llvm_reserved = null`)
 
 Output files:
 - `dataset_bc/raw_json/*.json`: copied raw BC JSON per crate

@@ -171,20 +171,22 @@ def _find_match_by_id(bc: Dict[str, Any], markers: List[Any]) -> Optional[Any]:
 
 def build_dataset_rows(
     crate: str, version: str, json_path: Path
-) -> Tuple[List[Dict[str, Any]], int, int]:
+) -> Tuple[List[Dict[str, Any]], int, int, int]:
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     bcs = extract_bounds_checks(payload)
     markers = extract_reserved_markers(payload)
     if not bcs or not markers:
-        return [], len(bcs), len(markers)
+        return [], len(bcs), len(markers), len(bcs)
 
     rows: List[Dict[str, Any]] = []
+    unmatched = 0
     for idx, bc in enumerate(bcs):
         marker = _find_match_by_id(bc, markers)
         if marker is None:
             marker = _find_match_by_line_file(bc, markers)
-        if marker is None:
-            marker = markers[idx % len(markers)]
+        matched = marker is not None
+        if not matched:
+            unmatched += 1
         rows.append(
             {
                 "crate": crate,
@@ -192,10 +194,11 @@ def build_dataset_rows(
                 "bc_index": idx,
                 "bc": bc,
                 "llvm_reserved": marker,
+                "llvm_reserved_matched": matched,
                 "bc_json_path": str(json_path),
             }
         )
-    return rows, len(bcs), len(markers)
+    return rows, len(bcs), len(markers), unmatched
 
 
 def main() -> None:
@@ -256,7 +259,9 @@ def main() -> None:
                     copied_json = raw_json_dir / f"{crate}-{version}.json"
                     shutil.copy2(json_path, copied_json)
 
-                    rows, bc_count, marker_count = build_dataset_rows(crate, version, copied_json)
+                    rows, bc_count, marker_count, unmatched = build_dataset_rows(
+                        crate, version, copied_json
+                    )
                     if not rows:
                         status["status"] = "empty_bc_or_reserved"
                         status["bc_count"] = bc_count
@@ -272,6 +277,7 @@ def main() -> None:
                     status["bc_count"] = bc_count
                     status["reserved_count"] = marker_count
                     status["dataset_rows"] = len(rows)
+                    status["unmatched_rows"] = unmatched
                     processed.append(status)
             except Exception as exc:
                 status["status"] = "error"
