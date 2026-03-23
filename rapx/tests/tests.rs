@@ -521,3 +521,17 @@ fn test_symbolic_interval() {
         );
     }
 }
+
+#[test]
+fn test_small_crate_deny_missing_docs() {
+    let output = running_tests_with_arg("others/support/deny_missing_docs", "--");
+    assert!(!output.contains("error: no such command: `rapx`"));
+    assert!(!output.contains("RAP|ERROR|"));
+}
+
+#[test]
+fn test_small_crate_no_std() {
+    let output = running_tests_with_arg("others/support/no_std", "-alias");
+    assert!(!output.contains("error: no such command: `rapx`"));
+    assert!(!output.contains("RAP|ERROR|"));
+}
