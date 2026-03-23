@@ -98,7 +98,7 @@ def _detect_crate_toolchain(crate_dir: Path) -> Optional[str]:
             break
         if first_value and "=" not in first_value and not first_value.startswith("["):
             normalized = _normalize_toolchain(first_value)
-            if normalized and " " not in normalized and "\t" not in normalized:
+            if normalized and not any(ch.isspace() for ch in normalized):
                 return normalized
         try:
             payload = tomllib.loads(content)
