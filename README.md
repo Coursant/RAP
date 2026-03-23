@@ -112,3 +112,27 @@ For `RAP_RECURSIVE`:
 NOTE: rapx will enter each member folder to do the check.
 
 
+### Collect BC JSON dataset from popular crates
+
+This repository provides a helper script to build a dataset from popular open-source crates:
+
+```shell
+python3 collect_popular_crates_bc_dataset.py \
+  --top-n 10 \
+  --output-dir dataset_bc \
+  --toolchain nightly-2025-12-06
+```
+
+What it does:
+1. Downloads top crates from crates.io (by downloads)
+2. Runs `cargo +<toolchain> rapx -O -- --locked` for each crate
+3. Finds generated bounds-check JSON (`bounds_checks*.json`)
+4. Builds `bc_dataset.jsonl` where each record contains:
+   - one BC entry (`bc`)
+   - the corresponding LLVM reserved marker (`llvm_reserved`)
+   - match status (`llvm_reserved_matched`, unmatched rows keep `llvm_reserved = null`)
+
+Output files:
+- `dataset_bc/raw_json/*.json`: copied raw BC JSON per crate
+- `dataset_bc/bc_dataset.jsonl`: dataset rows (one BC per line)
+- `dataset_bc/manifest.json`: per-crate processing status and counts
