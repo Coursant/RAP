@@ -85,18 +85,21 @@ def _detect_crate_toolchain(crate_dir: Path) -> Optional[str]:
     rust_toolchain = crate_dir / "rust-toolchain"
     if rust_toolchain.exists():
         content = rust_toolchain.read_text(encoding="utf-8").strip()
-        if content and "[" not in content and "\n" not in content:
-            normalized = _normalize_toolchain(content)
+        try:
+            payload = tomllib.loads(content)
+            normalized = _normalize_toolchain(payload.get("toolchain", {}).get("channel"))
             if normalized:
                 return normalized
-        else:
-            try:
-                payload = tomllib.loads(content)
-                normalized = _normalize_toolchain(payload.get("toolchain", {}).get("channel"))
-                if normalized:
-                    return normalized
-            except Exception:
-                pass
+        except Exception:
+            pass
+        for line in content.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            normalized = _normalize_toolchain(stripped.split("#", 1)[0].strip())
+            if normalized:
+                return normalized
+            break
 
     cargo_toml = crate_dir / "Cargo.toml"
     if not cargo_toml.exists():
@@ -112,11 +115,18 @@ def _detect_crate_toolchain(crate_dir: Path) -> Optional[str]:
 def run_rapx(crate_dir: Path, toolchain: str, timeout_sec: int) -> Tuple[bool, str, str]:
     attempts: List[Tuple[List[str], str]] = []
     crate_toolchain = _detect_crate_toolchain(crate_dir)
+    fallback_toolchain = _normalize_toolchain(toolchain) or toolchain.strip()
     if crate_toolchain:
         attempts.append(
             (["cargo", f"+{crate_toolchain}", "rapx", "-O", "--", "--locked"], crate_toolchain)
         )
-    attempts.append((["cargo", f"+{toolchain}", "rapx", "-O", "--", "--locked"], toolchain))
+    if fallback_toolchain:
+        attempts.append(
+            (
+                ["cargo", f"+{fallback_toolchain}", "rapx", "-O", "--", "--locked"],
+                fallback_toolchain,
+            )
+        )
     attempts.append((["cargo", "rapx", "-O", "--", "--locked"], "default"))
 
     seen = set()
