@@ -6,3 +6,6 @@ UPG/
 tests/**/Cargo.lock
 **/*.dot
 **/*.png
+**/*.jsonl
+**/*.log
+**/*.json
