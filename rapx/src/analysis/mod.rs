@@ -1,3 +1,4 @@
+pub mod boundchecks;
 pub mod core;
 pub mod graphs;
 pub mod opt;

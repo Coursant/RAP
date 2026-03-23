@@ -31,6 +31,7 @@ extern crate thin_vec;
 use crate::analysis::{core::alias_analysis::mfp::MfpAliasAnalyzer, scan::ScanAnalysis};
 use analysis::{
     Analysis,
+    boundchecks::dump_bounds_assert_database,
     core::{
         alias_analysis::{AliasAnalysis, FnAliasMapWrapper, default::AliasAnalyzer},
         api_dependency::ApiDependencyAnalyzer,
@@ -54,6 +55,7 @@ use analysis::{
 };
 use rustc_ast::ast;
 use rustc_driver::{Callbacks, Compilation};
+use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_interface::{
     Config,
     interface::{self, Compiler},
@@ -88,6 +90,7 @@ pub struct RapCallback {
     test: bool,
     infer: bool,
     opt: usize,
+    bounds_assert_database: bool,
     rcanary: bool,
     safedrop: bool,
     show_mir: bool,
@@ -114,6 +117,7 @@ impl Default for RapCallback {
             test: false,
             infer: false,
             opt: usize::MAX,
+            bounds_assert_database: false,
             rcanary: false,
             safedrop: false,
             show_mir: false,
@@ -305,9 +309,18 @@ impl RapCallback {
         self.opt = x;
     }
 
+    /// Enable standalone bounds-check assert database extraction.
+    pub fn enable_bounds_assert_database(&mut self) {
+        self.bounds_assert_database = true;
+    }
+
     /// Test if optimization analysis is enabled.
     pub fn is_opt_enabled(&self) -> usize {
         self.opt
+    }
+
+    pub fn is_bounds_assert_database_enabled(&self) -> bool {
+        self.bounds_assert_database
     }
 
     /// Enable rcanary for memory leakage detection.
@@ -537,6 +550,20 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
         1 => Opt::new(tcx, 1).start(),
         2 => Opt::new(tcx, 2).start(),
         _ => {}
+    }
+
+    if callback.is_bounds_assert_database_enabled() {
+        let crate_name = tcx.crate_name(LOCAL_CRATE);
+        let bounds_db_path = format!("bounds_checks_{}.json", crate_name.as_str());
+        if let Err(err) = dump_bounds_assert_database(tcx, &bounds_db_path) {
+            rap_warn!(
+                "Failed to dump bounds-check assert database to {}: {}",
+                bounds_db_path,
+                err
+            );
+        } else {
+            rap_info!("Dump bounds-check assert database to {}", bounds_db_path);
+        }
     }
 
     let _rcanary: Option<rCanary> = if callback.is_rcanary_enabled() {

@@ -8,20 +8,13 @@ use std::{
 
 use serde::Serialize;
 
-use rustc_hir::{
-    Block, BlockCheckMode, Safety, UnsafeSource,
-    def::DefKind,
-    intravisit,
-};
+use rustc_hir::{Block, BlockCheckMode, Safety, UnsafeSource, def::DefKind, intravisit};
 use rustc_middle::{
     mir::{AssertKind, Body, Operand, TerminatorKind},
     ty::{Ty, TyCtxt, TyKind},
 };
 
-use crate::analysis::{
-    core::callgraph::default::CallGraphAnalyzer,
-    utils::fn_info::check_safety,
-};
+use crate::analysis::{core::callgraph::default::CallGraphAnalyzer, utils::fn_info::check_safety};
 use crate::utils::log::{span_to_filename, span_to_line_number};
 
 #[derive(Serialize)]
@@ -93,8 +86,10 @@ pub fn dump_bounds_assert_database<'tcx>(
         if !matches!(def_kind, DefKind::Fn | DefKind::AssocFn) {
             continue;
         }
-        let body = tcx.optimized_mir(def_id);
-        collect_bounds_checks_in_body(tcx, body, &callers_map, &mut all_records);
+        if tcx.is_mir_available(def_id) {
+            let body = tcx.optimized_mir(def_id);
+            collect_bounds_checks_in_body(tcx, body, &callers_map, &mut all_records);
+        }
     }
 
     let llvm_reserved = build_llvm_reserved_from_release_asm(&all_records);
@@ -112,7 +107,13 @@ pub fn dump_bounds_assert_database<'tcx>(
 fn collect_bounds_checks_in_body<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &'tcx Body<'tcx>,
-    callers_map: &HashMap<rustc_hir::def_id::DefId, Vec<(rustc_hir::def_id::DefId, Option<&'tcx rustc_middle::mir::Terminator<'tcx>>)>>,
+    callers_map: &HashMap<
+        rustc_hir::def_id::DefId,
+        Vec<(
+            rustc_hir::def_id::DefId,
+            Option<&'tcx rustc_middle::mir::Terminator<'tcx>>,
+        )>,
+    >,
     output: &mut Vec<BoundsCheckRecord>,
 ) {
     let def_id = body.source.def_id();
@@ -193,7 +194,13 @@ fn classify_bounds_ty(tcx: TyCtxt<'_>, ty: Ty<'_>) -> String {
 
 fn build_callers<'tcx>(
     tcx: TyCtxt<'tcx>,
-    callers_map: &HashMap<rustc_hir::def_id::DefId, Vec<(rustc_hir::def_id::DefId, Option<&'tcx rustc_middle::mir::Terminator<'tcx>>)>>,
+    callers_map: &HashMap<
+        rustc_hir::def_id::DefId,
+        Vec<(
+            rustc_hir::def_id::DefId,
+            Option<&'tcx rustc_middle::mir::Terminator<'tcx>>,
+        )>,
+    >,
     def_id: rustc_hir::def_id::DefId,
 ) -> Vec<CallerInfo> {
     callers_map
@@ -252,8 +259,9 @@ fn build_llvm_reserved_from_release_asm(records: &[BoundsCheckRecord]) -> serde_
     const BOUNDS_PANIC_SYMBOLS: [&str; 2] = ["panic_bounds_check", "slice_index_len_fail"];
     match generate_release_llvm_ir_in_current_crate()
         .and_then(|_| find_release_llvm_ir_files())
-        .and_then(|files| extract_retained_bounds_lines_from_llvm_ir_files(files, &BOUNDS_PANIC_SYMBOLS))
-    {
+        .and_then(|files| {
+            extract_retained_bounds_lines_from_llvm_ir_files(files, &BOUNDS_PANIC_SYMBOLS)
+        }) {
         Ok(retained_lines) => {
             let llvm_records = records
                 .iter()
@@ -447,8 +455,7 @@ start:
 }
 !42 = !DILocation(line: 123, column: 9, scope: !1)
 "#;
-        let retained =
-            extract_retained_bounds_lines_from_llvm_ir(ir, &["panic_bounds_check"]);
+        let retained = extract_retained_bounds_lines_from_llvm_ir(ir, &["panic_bounds_check"]);
         assert!(retained.contains(&123));
     }
 
@@ -461,8 +468,7 @@ start:
   ret void
 }
 "#;
-        let retained =
-            extract_retained_bounds_lines_from_llvm_ir(ir, &["panic_bounds_check"]);
+        let retained = extract_retained_bounds_lines_from_llvm_ir(ir, &["panic_bounds_check"]);
         assert!(retained.is_empty());
     }
 }

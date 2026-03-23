@@ -384,7 +384,6 @@ impl<'tcx> SymbExpr<'tcx> {
             *self = simplified;
             return;
         }
-
     }
 
     fn try_flatten_linear(&self) -> Option<Self> {
@@ -420,10 +419,8 @@ impl<'tcx> SymbExpr<'tcx> {
         merged.retain(|(coeff, _)| *coeff != 0);
 
         if merged.is_empty() {
-
             return Some(SymbExpr::Unknown);
         }
-
 
         let mut pos_terms = vec![];
         let mut neg_terms = vec![];
@@ -447,7 +444,7 @@ impl<'tcx> SymbExpr<'tcx> {
             (Some(p), Some(n)) => Some(SymbExpr::Binary(BinOp::Sub, Box::new(p), Box::new(n))),
             (Some(p), None) => Some(p),
             (None, Some(n)) => Some(SymbExpr::Unary(UnOp::Neg, Box::new(n))),
-            (None, None) => unreachable!(), 
+            (None, None) => unreachable!(),
         }
     }
 
@@ -460,7 +457,7 @@ impl<'tcx> SymbExpr<'tcx> {
                 }
                 BinOp::Sub | BinOp::SubUnchecked | BinOp::SubWithOverflow => {
                     lhs.extract_linear_terms(sign, terms);
-                    rhs.extract_linear_terms(-sign, terms); 
+                    rhs.extract_linear_terms(-sign, terms);
                 }
                 _ => terms.push((sign, self.clone())),
             },
@@ -481,7 +478,6 @@ impl<'tcx> SymbExpr<'tcx> {
         }
         Some(tree)
     }
-    
 }
 #[derive(Debug, Clone)]
 pub enum IntervalType<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {

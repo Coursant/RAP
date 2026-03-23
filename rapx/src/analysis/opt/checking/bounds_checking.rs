@@ -3,7 +3,6 @@ use rustc_middle::ty::TyCtxt;
 use crate::analysis::core::dataflow::graph::Graph;
 use crate::analysis::opt::OptCheck;
 
-pub mod bounds_assert_database;
 pub mod bounds_extend;
 pub mod bounds_len;
 pub mod bounds_loop_push;

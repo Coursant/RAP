@@ -53,6 +53,7 @@ fn main() {
             "-O" | "-opt" => compiler.enable_opt(1),
             "-opt=all" => compiler.enable_opt(2),
             "-opt=report" => compiler.enable_opt(0),
+            "-bounds-db" => compiler.enable_bounds_assert_database(),
             "-scan" => compiler.enable_scan(),
             "-ssa" => compiler.enable_ssa_transform(),
             "-upg" => compiler.enable_upg(1),

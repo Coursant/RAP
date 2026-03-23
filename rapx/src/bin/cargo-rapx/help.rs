@@ -23,6 +23,7 @@ Analysis:
     -pathcond       extract path constraints
     -range          perform range analysis
     -scan           print basic information of the crate, e.g., the number of APIs.
+    -bounds-db      dump bounds-check assert database into bounds_checks_<crate>.json
 
 General command: 
     -help                        show help information

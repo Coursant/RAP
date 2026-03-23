@@ -34,6 +34,66 @@ def fetch_popular_crates(limit: int) -> List[Dict[str, str]]:
     return result
 
 
+def _normalize_crate_entry(entry: Any) -> Optional[Dict[str, str]]:
+    if isinstance(entry, dict):
+        name = str(entry.get("name", "")).strip()
+        version = str(entry.get("version", "")).strip()
+        if name and version:
+            return {"name": name, "version": version}
+        return None
+
+    if isinstance(entry, str):
+        text = entry.strip()
+        if not text:
+            return None
+        if "@" in text:
+            name, version = text.split("@", 1)
+            name = name.strip()
+            version = version.strip()
+            if name and version:
+                return {"name": name, "version": version}
+        parts = text.split()
+        if len(parts) >= 2:
+            name = parts[0].strip()
+            version = parts[1].strip()
+            if name and version:
+                return {"name": name, "version": version}
+    return None
+
+
+def load_fixed_crates(crates_file: Path) -> List[Dict[str, str]]:
+    if not crates_file.exists():
+        raise FileNotFoundError(f"crates file not found: {crates_file}")
+
+    text = crates_file.read_text(encoding="utf-8")
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        payload = None
+
+    crates: List[Dict[str, str]] = []
+    if isinstance(payload, list):
+        for item in payload:
+            normalized = _normalize_crate_entry(item)
+            if normalized:
+                crates.append(normalized)
+    else:
+        for raw_line in text.splitlines():
+            line = raw_line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            normalized = _normalize_crate_entry(line)
+            if normalized:
+                crates.append(normalized)
+
+    if not crates:
+        raise ValueError(
+            "no valid crate entries found; expected lines like 'name@version' or JSON list"
+        )
+    return crates
+
+
 def download_and_extract_crate(crate: str, version: str, dst_dir: Path) -> Path:
     dst_dir.mkdir(parents=True, exist_ok=True)
     crate_workdir = dst_dir / f"{crate}-{version}"
@@ -124,18 +184,18 @@ def run_rapx(crate_dir: Path, toolchain: str, timeout_sec: int) -> Tuple[bool, s
     fallback_toolchain = _normalize_toolchain(toolchain)
     if crate_toolchain:
         attempts.append(
-            (["cargo", f"+{crate_toolchain}", "rapx", "-O", "--", "--locked"], crate_toolchain)
+            (["cargo", f"+{crate_toolchain}", "rapx", "-bounds-db"], crate_toolchain)
         )
     if fallback_toolchain:
         attempts.append(
             (
-                ["cargo", f"+{fallback_toolchain}", "rapx", "-O", "--", "--locked"],
+                ["cargo", f"+{fallback_toolchain}", "rapx", "-bounds-db"],
                 fallback_toolchain,
             )
         )
-    attempts.append((["cargo", "+stable", "rapx", "-O", "--", "--locked"], "stable"))
-    attempts.append((["cargo", "+nightly", "rapx", "-O", "--", "--locked"], "nightly"))
-    attempts.append((["cargo", "rapx", "-O", "--", "--locked"], "default"))
+    attempts.append((["cargo", "+stable", "rapx", "-bounds-db"], "stable"))
+    attempts.append((["cargo", "+nightly", "rapx", "-bounds-db"], "nightly"))
+    attempts.append((["cargo", "rapx", "-bounds-db"], "default"))
 
     seen = set()
     merged_output: List[str] = []
@@ -277,9 +337,15 @@ def build_dataset_rows(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Download popular crates, run rapx -O, and build BC dataset linked to llvm.reserved markers."
+        description="Download crates, run rapx -bounds-db, and build BC dataset linked to llvm.reserved markers."
     )
-    parser.add_argument("--top-n", type=int, default=10, help="How many popular crates to process.")
+    parser.add_argument("--top-n", type=int, default=3, help="How many popular crates to process.")
+    parser.add_argument(
+        "--crates-file",
+        type=Path,
+        default=None,
+        help="Path to a fixed crate list file (JSON list or text lines like 'crate@version').",
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -289,7 +355,7 @@ def main() -> None:
     parser.add_argument(
         "--toolchain",
         default="nightly-2025-12-06",
-        help="Rust toolchain used for cargo +<toolchain> rapx -O.",
+        help="Rust toolchain used for cargo +<toolchain> rapx -bounds-db.",
     )
     parser.add_argument(
         "--timeout-sec", type=int, default=1800, help="Timeout (seconds) for each crate analysis."
@@ -306,16 +372,24 @@ def main() -> None:
     dataset_path = output_dir / "bc_dataset.jsonl"
     manifest_path = output_dir / "manifest.json"
     try:
-        crates = fetch_popular_crates(args.top_n)
+        if args.crates_file is not None:
+            crates = load_fixed_crates(args.crates_file)
+        else:
+            crates = fetch_popular_crates(args.top_n)
     except Exception as exc:
         manifest = {
             "top_n": args.top_n,
+            "crates_file": str(args.crates_file) if args.crates_file is not None else None,
             "toolchain": args.toolchain,
             "output_dir": str(output_dir),
             "dataset_path": str(dataset_path),
             "total_rows": 0,
             "processed": [],
-            "status": "fetch_popular_crates_failed",
+            "status": (
+                "load_fixed_crates_failed"
+                if args.crates_file is not None
+                else "fetch_popular_crates_failed"
+            ),
             "error": str(exc),
         }
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -378,11 +452,13 @@ def main() -> None:
 
     manifest = {
         "top_n": args.top_n,
+        "crates_file": str(args.crates_file) if args.crates_file is not None else None,
         "toolchain": args.toolchain,
         "output_dir": str(output_dir),
         "dataset_path": str(dataset_path),
         "total_rows": total_rows,
         "processed": processed,
+        "source_mode": "fixed_crates" if args.crates_file is not None else "popular_crates",
     }
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(manifest, ensure_ascii=False, indent=2))

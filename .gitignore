@@ -11,3 +11,5 @@ tests/**/Cargo.lock
 **/*.json
 __pycache__/
 **/*.pyc
+dataset_bc_fixed/
+dataset_bc/
