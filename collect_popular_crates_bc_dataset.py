@@ -302,9 +302,24 @@ def main() -> None:
     for d in (sources_dir, raw_json_dir, logs_dir):
         d.mkdir(parents=True, exist_ok=True)
 
-    crates = fetch_popular_crates(args.top_n)
     dataset_path = output_dir / "bc_dataset.jsonl"
     manifest_path = output_dir / "manifest.json"
+    try:
+        crates = fetch_popular_crates(args.top_n)
+    except Exception as exc:
+        manifest = {
+            "top_n": args.top_n,
+            "toolchain": args.toolchain,
+            "output_dir": str(output_dir),
+            "dataset_path": str(dataset_path),
+            "total_rows": 0,
+            "processed": [],
+            "status": "fetch_popular_crates_failed",
+            "error": str(exc),
+        }
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(json.dumps(manifest, ensure_ascii=False, indent=2))
+        return
 
     processed = []
     total_rows = 0
