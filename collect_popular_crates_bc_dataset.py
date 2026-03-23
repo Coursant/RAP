@@ -8,6 +8,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import tomllib
 
 
 CRATES_API = "https://crates.io/api/v1/crates"
@@ -61,30 +62,85 @@ def download_and_extract_crate(crate: str, version: str, dst_dir: Path) -> Path:
     return crate_workdir
 
 
-def run_rapx(crate_dir: Path, toolchain: str, timeout_sec: int) -> Tuple[bool, str]:
-    cmd = ["cargo", f"+{toolchain}", "rapx", "-O", "--", "--locked"]
-    proc = subprocess.run(
-        cmd,
-        cwd=crate_dir,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        timeout=timeout_sec,
-        check=False,
-    )
-    if proc.returncode == 0:
-        return True, proc.stdout
-    fallback_cmd = ["cargo", "rapx", "-O", "--", "--locked"]
-    fallback_proc = subprocess.run(
-        fallback_cmd,
-        cwd=crate_dir,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        timeout=timeout_sec,
-        check=False,
-    )
-    return fallback_proc.returncode == 0, fallback_proc.stdout
+def _normalize_toolchain(channel: Any) -> Optional[str]:
+    if not isinstance(channel, str):
+        return None
+    cleaned = channel.strip()
+    if not cleaned:
+        return None
+    return cleaned[1:] if cleaned.startswith("+") else cleaned
+
+
+def _detect_crate_toolchain(crate_dir: Path) -> Optional[str]:
+    rust_toolchain_toml = crate_dir / "rust-toolchain.toml"
+    if rust_toolchain_toml.exists():
+        try:
+            payload = tomllib.loads(rust_toolchain_toml.read_text(encoding="utf-8"))
+            normalized = _normalize_toolchain(payload.get("toolchain", {}).get("channel"))
+            if normalized:
+                return normalized
+        except Exception:
+            pass
+
+    rust_toolchain = crate_dir / "rust-toolchain"
+    if rust_toolchain.exists():
+        content = rust_toolchain.read_text(encoding="utf-8").strip()
+        if content and "[" not in content and "\n" not in content:
+            normalized = _normalize_toolchain(content)
+            if normalized:
+                return normalized
+        else:
+            try:
+                payload = tomllib.loads(content)
+                normalized = _normalize_toolchain(payload.get("toolchain", {}).get("channel"))
+                if normalized:
+                    return normalized
+            except Exception:
+                pass
+
+    cargo_toml = crate_dir / "Cargo.toml"
+    if not cargo_toml.exists():
+        return None
+    try:
+        payload = tomllib.loads(cargo_toml.read_text(encoding="utf-8"))
+        rust_version = payload.get("package", {}).get("rust-version")
+        return _normalize_toolchain(rust_version)
+    except Exception:
+        return None
+
+
+def run_rapx(crate_dir: Path, toolchain: str, timeout_sec: int) -> Tuple[bool, str, str]:
+    attempts: List[Tuple[List[str], str]] = []
+    crate_toolchain = _detect_crate_toolchain(crate_dir)
+    if crate_toolchain:
+        attempts.append(
+            (["cargo", f"+{crate_toolchain}", "rapx", "-O", "--", "--locked"], crate_toolchain)
+        )
+    attempts.append((["cargo", f"+{toolchain}", "rapx", "-O", "--", "--locked"], toolchain))
+    attempts.append((["cargo", "rapx", "-O", "--", "--locked"], "default"))
+
+    seen = set()
+    merged_output: List[str] = []
+    for cmd, used_toolchain in attempts:
+        cmd_key = tuple(cmd)
+        if cmd_key in seen:
+            continue
+        seen.add(cmd_key)
+        proc = subprocess.run(
+            cmd,
+            cwd=crate_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+        merged_output.append(
+            f"$ {' '.join(cmd)}\n{proc.stdout}"
+        )
+        if proc.returncode == 0:
+            return True, "\n".join(merged_output), used_toolchain
+    return False, "\n".join(merged_output), "none"
 
 
 def find_latest_bc_json(crate_dir: Path) -> Optional[Path]:
@@ -243,12 +299,15 @@ def main() -> None:
             try:
                 with tempfile.TemporaryDirectory(prefix=f"{crate}-", dir=str(sources_dir)) as tmp:
                     crate_dir = download_and_extract_crate(crate, version, Path(tmp))
-                    ok, rapx_output = run_rapx(crate_dir, args.toolchain, args.timeout_sec)
+                    ok, rapx_output, used_toolchain = run_rapx(
+                        crate_dir, args.toolchain, args.timeout_sec
+                    )
                     (logs_dir / f"{crate}-{version}.log").write_text(rapx_output, encoding="utf-8")
                     if not ok:
                         status["status"] = "rapx_failed"
                         processed.append(status)
                         continue
+                    status["used_toolchain"] = used_toolchain
 
                     json_path = find_latest_bc_json(crate_dir)
                     if json_path is None:
