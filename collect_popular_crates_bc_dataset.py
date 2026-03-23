@@ -4,7 +4,6 @@ import json
 import shutil
 import subprocess
 import tarfile
-import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -134,6 +133,8 @@ def run_rapx(crate_dir: Path, toolchain: str, timeout_sec: int) -> Tuple[bool, s
                 fallback_toolchain,
             )
         )
+    attempts.append((["cargo", "+stable", "rapx", "-O", "--", "--locked"], "stable"))
+    attempts.append((["cargo", "+nightly", "rapx", "-O", "--", "--locked"], "nightly"))
     attempts.append((["cargo", "rapx", "-O", "--", "--locked"], "default"))
 
     seen = set()
@@ -329,47 +330,47 @@ def main() -> None:
             version = item["version"]
             status: Dict[str, Any] = {"crate": crate, "version": version}
             try:
-                with tempfile.TemporaryDirectory(prefix=f"{crate}-", dir=str(sources_dir)) as tmp:
-                    crate_dir = download_and_extract_crate(crate, version, Path(tmp))
-                    ok, rapx_output, used_toolchain = run_rapx(
-                        crate_dir, args.toolchain, args.timeout_sec
-                    )
-                    (logs_dir / f"{crate}-{version}.log").write_text(rapx_output, encoding="utf-8")
-                    if not ok:
-                        status["status"] = "rapx_failed"
-                        processed.append(status)
-                        continue
-                    status["used_toolchain"] = used_toolchain
+                crate_dir = download_and_extract_crate(crate, version, sources_dir)
+                ok, rapx_output, used_toolchain = run_rapx(
+                    crate_dir, args.toolchain, args.timeout_sec
+                )
+                (logs_dir / f"{crate}-{version}.log").write_text(rapx_output, encoding="utf-8")
+                status["source_dir"] = str(crate_dir)
+                if not ok:
+                    status["status"] = "rapx_failed"
+                    processed.append(status)
+                    continue
+                status["used_toolchain"] = used_toolchain
 
-                    json_path = find_latest_bc_json(crate_dir)
-                    if json_path is None:
-                        status["status"] = "bc_json_not_found"
-                        processed.append(status)
-                        continue
+                json_path = find_latest_bc_json(crate_dir)
+                if json_path is None:
+                    status["status"] = "bc_json_not_found"
+                    processed.append(status)
+                    continue
 
-                    copied_json = raw_json_dir / f"{crate}-{version}.json"
-                    shutil.copy2(json_path, copied_json)
+                copied_json = raw_json_dir / f"{crate}-{version}.json"
+                shutil.copy2(json_path, copied_json)
 
-                    rows, bc_count, marker_count, unmatched = build_dataset_rows(
-                        crate, version, copied_json
-                    )
-                    if not rows:
-                        status["status"] = "empty_bc_or_reserved"
-                        status["bc_count"] = bc_count
-                        status["reserved_count"] = marker_count
-                        processed.append(status)
-                        continue
-
-                    for row in rows:
-                        dataset_f.write(json.dumps(row, ensure_ascii=False) + "\n")
-
-                    total_rows += len(rows)
-                    status["status"] = "ok"
+                rows, bc_count, marker_count, unmatched = build_dataset_rows(
+                    crate, version, copied_json
+                )
+                if not rows:
+                    status["status"] = "empty_bc_or_reserved"
                     status["bc_count"] = bc_count
                     status["reserved_count"] = marker_count
-                    status["dataset_rows"] = len(rows)
-                    status["unmatched_rows"] = unmatched
                     processed.append(status)
+                    continue
+
+                for row in rows:
+                    dataset_f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+                total_rows += len(rows)
+                status["status"] = "ok"
+                status["bc_count"] = bc_count
+                status["reserved_count"] = marker_count
+                status["dataset_rows"] = len(rows)
+                status["unmatched_rows"] = unmatched
+                processed.append(status)
             except Exception as exc:
                 status["status"] = "error"
                 status["error"] = str(exc)
