@@ -24,7 +24,7 @@ pub fn run_cmd(mut cmd: Command) {
 }
 
 pub fn run_rustc() {
-    let mut cmd = Command::new(args::rustc_path());
+    let mut cmd = Command::new("rustc");
     cmd.args(args::skip2());
     run_cmd(cmd);
 }

@@ -81,10 +81,6 @@ impl Arguments {
     }
 }
 
-fn rustc_path_from_args(args: &[String]) -> &str {
-    args.get(1).map_or("rustc", |arg| arg.as_str())
-}
-
 pub fn rap_clean() -> bool {
     ARGS.rap_clean
 }
@@ -134,10 +130,6 @@ pub fn get_arg(pos: usize) -> Option<&'static str> {
     ARGS.args.get(pos).map(|x| x.as_str())
 }
 
-pub fn rustc_path() -> &'static str {
-    rustc_path_from_args(&ARGS.args)
-}
-
 pub fn skip2() -> &'static [String] {
     ARGS.args.get(2..).unwrap_or(&[])
 }
@@ -150,26 +142,4 @@ pub fn current_exe_path() -> &'static Path {
 /// even though both flavors are accepted here.
 pub fn timeout() -> Option<u64> {
     ARGS.get_arg_flag_value("-timeout")?.parse().ok()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::rustc_path_from_args;
-
-    #[test]
-    fn rustc_path_uses_wrapper_provided_compiler() {
-        let args = vec![
-            "cargo-rapx".to_string(),
-            "/tmp/rust-toolchain-a/bin/rustc".to_string(),
-            "--crate-name".to_string(),
-            "demo".to_string(),
-        ];
-        assert_eq!(rustc_path_from_args(&args), "/tmp/rust-toolchain-a/bin/rustc");
-    }
-
-    #[test]
-    fn rustc_path_falls_back_to_rustc_when_missing() {
-        let args = vec!["cargo-rapx".to_string()];
-        assert_eq!(rustc_path_from_args(&args), "rustc");
-    }
 }

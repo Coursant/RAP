@@ -21,15 +21,13 @@ cargo +nightly-2025-12-06 install rapx --git https://github.com/Artisan-Lab/RAPx
 
 ## Usage
 
-Navigate to your Rust project folder containing a `Cargo.toml` file. `cargo rapx` follows the toolchain
-selected by the crate (for example, `rust-toolchain.toml`, project override, or default toolchain), so you
-don't need to force a fixed version from RAPx.
+Navigate to your Rust project folder containing a `Cargo.toml` file. Then run `rapx` by manually specifying the toolchain version according to the [toolchain override shorthand syntax](https://rust-lang.github.io/rustup/overrides.html#toolchain-override-shorthand).
 
 ```shell
-cargo rapx [rapx options] -- [cargo check options]
+cargo +nightly-2025-12-06 rapx [rapx options] -- [cargo check options]
 ```
 
-or by setting up default toolchain to a compatible version.
+or by setting up default toolchain to the required version.
 ```shell
 rustup default nightly-2025-12-06
 ```
@@ -112,3 +110,5 @@ For `RAP_RECURSIVE`:
 * deep: check for all workspaces from current folder
  
 NOTE: rapx will enter each member folder to do the check.
+
+
