@@ -139,3 +139,4 @@ Output files:
 - `dataset_bc/raw_json/*.json`: copied raw BC JSON per crate
 - `dataset_bc/bc_dataset.jsonl`: dataset rows (one BC per line)
 - `dataset_bc/manifest.json`: per-crate processing status and counts
+  - if crates.io is unreachable, manifest is still written with `status = "fetch_popular_crates_failed"` and the error message
