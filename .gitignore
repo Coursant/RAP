@@ -9,3 +9,5 @@ tests/**/Cargo.lock
 **/*.jsonl
 **/*.log
 **/*.json
+__pycache__/
+**/*.pyc

@@ -125,7 +125,10 @@ python3 collect_popular_crates_bc_dataset.py \
 
 What it does:
 1. Downloads top crates from crates.io (by downloads)
-2. Runs `cargo +<toolchain> rapx -O -- --locked` for each crate
+2. Runs `cargo rapx -O` per crate with adaptive toolchain selection:
+   - prefer crate-local `rust-toolchain.toml` / `rust-toolchain`
+   - fallback to `Cargo.toml` `rust-version`
+   - fallback to `--toolchain`, then default cargo toolchain
 3. Finds generated bounds-check JSON (`bounds_checks*.json`)
 4. Builds `bc_dataset.jsonl` where each record contains:
    - one BC entry (`bc`)
