@@ -68,7 +68,11 @@ def _normalize_toolchain(channel: Any) -> Optional[str]:
     cleaned = channel.strip()
     if not cleaned:
         return None
-    return cleaned[1:] if cleaned.startswith("+") else cleaned
+    normalized = cleaned[1:] if cleaned.startswith("+") else cleaned
+    parts = normalized.split(".")
+    if len(parts) == 2 and all(part.isdigit() for part in parts):
+        return f"{normalized}.0"
+    return normalized
 
 
 def _detect_crate_toolchain(crate_dir: Path) -> Optional[str]:
@@ -92,7 +96,7 @@ def _detect_crate_toolchain(crate_dir: Path) -> Optional[str]:
                 continue
             first_value = stripped.split("#", 1)[0].strip()
             break
-        if first_value and "=" not in first_value and "[" not in first_value and "]" not in first_value:
+        if first_value and "=" not in first_value and not first_value.startswith("["):
             normalized = _normalize_toolchain(first_value)
             if normalized and " " not in normalized and "\t" not in normalized:
                 return normalized
