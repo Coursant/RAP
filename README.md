@@ -29,7 +29,7 @@ don't need to force a fixed version from RAPx.
 cargo rapx [rapx options] -- [cargo check options]
 ```
 
-or by setting up default toolchain to the required version.
+or by setting up default toolchain to a compatible version.
 ```shell
 rustup default nightly-2025-12-06
 ```
@@ -112,4 +112,3 @@ For `RAP_RECURSIVE`:
 * deep: check for all workspaces from current folder
  
 NOTE: rapx will enter each member folder to do the check.
-
