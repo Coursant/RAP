@@ -54,30 +54,31 @@ fn z3_interval(local_name: &str, lower_bound: i64, upper_bound: i64) -> (i64, i6
     let local = Int::new_const(&context, local_name);
     let lower = Int::from_i64(&context, lower_bound);
     let upper = Int::from_i64(&context, upper_bound);
+    let solver = Optimize::new(&context);
+    solver.assert(&local.ge(&lower));
+    solver.assert(&local.le(&upper));
 
-    let min_solver = Optimize::new(&context);
-    min_solver.assert(&local.ge(&lower));
-    min_solver.assert(&local.le(&upper));
-    min_solver.minimize(&local);
-    assert_eq!(min_solver.check(&[]), SatResult::Sat);
-    let min_model = min_solver.get_model().expect("Expected model for min bound");
+    solver.push();
+    solver.minimize(&local);
+    assert_eq!(solver.check(&[]), SatResult::Sat);
+    let min_model = solver.get_model().expect("Expected model for min bound");
     let min_value = min_model
         .eval(&local, true)
         .expect("Expected model eval for min bound")
         .as_i64()
         .expect("Expected i64 min bound");
+    solver.pop();
 
-    let max_solver = Optimize::new(&context);
-    max_solver.assert(&local.ge(&lower));
-    max_solver.assert(&local.le(&upper));
-    max_solver.maximize(&local);
-    assert_eq!(max_solver.check(&[]), SatResult::Sat);
-    let max_model = max_solver.get_model().expect("Expected model for max bound");
+    solver.push();
+    solver.maximize(&local);
+    assert_eq!(solver.check(&[]), SatResult::Sat);
+    let max_model = solver.get_model().expect("Expected model for max bound");
     let max_value = max_model
         .eval(&local, true)
         .expect("Expected model eval for max bound")
         .as_i64()
         .expect("Expected i64 max bound");
+    solver.pop();
 
     (min_value, max_value)
 }
@@ -519,7 +520,7 @@ fn test_range_analysis() {
 }
 #[test]
 
-fn test_interprocedual_range_analysis() {
+fn test_interprocedural_range_analysis() {
     let output = running_tests_with_arg("range/range_2", "-range");
 
     let expected_ranges = vec![
