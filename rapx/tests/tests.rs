@@ -1,6 +1,8 @@
 #![allow(clippy::bool_assert_comparison)]
 use std::path::Path;
 use std::process::Command;
+use z3::ast::Int;
+use z3::{Config, Context, Optimize, SatResult};
 
 /// Checks if any bug message in the output has confidence > 50
 pub fn detected_high_confidence(output: &str) -> bool {
@@ -31,6 +33,53 @@ fn running_tests_with_arg(dir: &str, arg: &str) -> String {
         .expect("Failed to execute cargo rapx");
 
     String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+fn parse_range_line(output: &str, local_name: &str) -> Option<(i64, i64)> {
+    let escaped_local = regex::escape(local_name);
+    let pattern = format!(
+        r"(?m)^\s*{}\s*=>\s*Regular\s*\[\s*(-?\d+)\s*,\s*(-?\d+)\s*\]\s*$",
+        escaped_local
+    );
+    let re = regex::Regex::new(&pattern).ok()?;
+    let caps = re.captures(output)?;
+    let lower = caps.get(1)?.as_str().parse::<i64>().ok()?;
+    let upper = caps.get(2)?.as_str().parse::<i64>().ok()?;
+    Some((lower, upper))
+}
+
+fn z3_interval(local_name: &str, lower_bound: i64, upper_bound: i64) -> (i64, i64) {
+    let config = Config::new();
+    let context = Context::new(&config);
+    let local = Int::new_const(&context, local_name);
+    let lower = Int::from_i64(&context, lower_bound);
+    let upper = Int::from_i64(&context, upper_bound);
+
+    let min_solver = Optimize::new(&context);
+    min_solver.assert(&local.ge(&lower));
+    min_solver.assert(&local.le(&upper));
+    min_solver.minimize(&local);
+    assert_eq!(min_solver.check(&[]), SatResult::Sat);
+    let min_model = min_solver.get_model().expect("Expected model for min bound");
+    let min_value = min_model
+        .eval(&local, true)
+        .expect("Expected model eval for min bound")
+        .as_i64()
+        .expect("Expected i64 min bound");
+
+    let max_solver = Optimize::new(&context);
+    max_solver.assert(&local.ge(&lower));
+    max_solver.assert(&local.le(&upper));
+    max_solver.maximize(&local);
+    assert_eq!(max_solver.check(&[]), SatResult::Sat);
+    let max_model = max_solver.get_model().expect("Expected model for max bound");
+    let max_value = max_model
+        .eval(&local, true)
+        .expect("Expected model eval for max bound")
+        .as_i64()
+        .expect("Expected i64 max bound");
+
+    (min_value, max_value)
 }
 
 // ================Dangling Pointer Detection Test=====================
@@ -439,28 +488,32 @@ fn test_upg_static_mut() {
 #[test]
 fn test_range_analysis() {
     let output = running_tests_with_arg("range/range_1", "-range");
-
     let expected_ranges = vec![
-        "_20 => Regular [0, 0]",
-        "_47 => Regular [1, 100]",
-        "_25 => Regular [0, 100]",
-        "_28 => Regular [0, 0]",
-        "_39 => Regular [1, 99]",
-        "_29 => Regular [0, 99]",
-        "_41 => Regular [0, 98]",
-        "_33 => Regular [0, 99]",
-        "_34 => Regular [0, 99]",
-        "_38 => Regular [1, 99]",
-        "_40 => Regular [0, 98]",
-        "_46 => Regular [1, 100]",
+        ("_20", z3_interval("_20", 0, 0)),
+        ("_47", z3_interval("_47", 1, 100)),
+        ("_25", z3_interval("_25", 0, 100)),
+        ("_28", z3_interval("_28", 0, 0)),
+        ("_39", z3_interval("_39", 1, 99)),
+        ("_29", z3_interval("_29", 0, 99)),
+        ("_41", z3_interval("_41", 0, 98)),
+        ("_33", z3_interval("_33", 0, 99)),
+        ("_34", z3_interval("_34", 0, 99)),
+        ("_38", z3_interval("_38", 1, 99)),
+        ("_40", z3_interval("_40", 0, 98)),
+        ("_46", z3_interval("_46", 1, 100)),
     ];
 
-    for expected in expected_ranges {
-        assert!(
-            output.contains(expected),
-            "Missing expected range: '{}'\nFull output:\n{}",
-            expected,
-            output
+    for (local_name, z3_expected) in expected_ranges {
+        let analyzed = parse_range_line(&output, local_name).unwrap_or_else(|| {
+            panic!(
+                "Missing analyzed range for local '{}'\nFull output:\n{}",
+                local_name, output
+            )
+        });
+        assert_eq!(
+            analyzed, z3_expected,
+            "Range mismatch for local '{}': analyzed={:?}, z3={:?}\nFull output:\n{}",
+            local_name, analyzed, z3_expected, output
         );
     }
 }
