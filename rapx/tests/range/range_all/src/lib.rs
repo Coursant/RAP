@@ -73,6 +73,7 @@ pub fn path_constraints_branching() {
             y += 2;
         }
     }
+    let _ = y;
 }
 
 /// testcase: 递归路径（对应 range_4）
@@ -172,7 +173,7 @@ pub fn dual_array_slice_indexing() {
 /// - 验证 `string.as_bytes()[0]` 的字节索引模式；
 /// - 验证 `char_indices` 与分支匹配下的索引切片 `input[..i]` / `input[i+1..]`；
 /// - 覆盖“字符分类 + 索引切分”的真实场景。
-pub fn parse_scheme_case(input: &str) -> Option<(String, &str)> {
+pub fn parse_scheme_case(input: &str, context: bool) -> Option<(String, &str)> {
     #[derive(PartialEq, Eq)]
     enum Context {
         UrlParser,
@@ -196,7 +197,13 @@ pub fn parse_scheme_case(input: &str) -> Option<(String, &str)> {
         }
     }
 
-    match Context::UrlParser {
+    let mode = if context {
+        Context::Setter
+    } else {
+        Context::UrlParser
+    };
+
+    match mode {
         Context::Setter => Some((input.to_ascii_lowercase(), "")),
         Context::UrlParser => None,
     }
@@ -282,4 +289,3 @@ pub fn bce_failure_opaque_boundary(slice: &[i32]) -> i32 {
     let idx = get_opaque_index();
     slice[idx]
 }
-
