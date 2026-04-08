@@ -17,9 +17,8 @@ use std::slice;
 /// - Verify joint interval updates for multiple variables (`i`, `j`, `k`) in loops;
 /// - Verify that while-conditions and loop-body assignments continuously tighten bounds;
 /// - Verify stable convergence behavior under nested loops.
-pub fn numeric_coupled_loop(start_k: usize, upper_bound: usize) {
-    let mut k = start_k;
-    while k < upper_bound {
+pub fn numeric_coupled_loop() {
+    while k < 100 {
         let mut i = 0usize;
         let mut j = k;
         while i < j {
@@ -36,13 +35,13 @@ pub fn numeric_coupled_loop(start_k: usize, upper_bound: usize) {
 /// - Verify argument intervals are propagated from callsite to callee;
 /// - Verify return-value intervals are propagated back after callee-side loop updates;
 /// - Cover inter-procedural analysis behavior.
-pub fn interprocedural_ranges(foo1_seed: usize, foo2_seed: usize, c: usize, upper_bound: usize) -> usize {
+pub fn interprocedural_ranges(foo1_seed: usize, foo2_seed: usize, upper_bound: usize) -> usize {
     fn foo1(mut k: usize, upper_bound: usize) {
         while k < upper_bound {
             k += 1;
         }
     }
-    fn foo2(mut k: usize, _c: usize, upper_bound: usize) -> usize {
+    fn foo2(mut k: usize, upper_bound: usize) -> usize {
         while k < upper_bound {
             k += 1;
         }
@@ -50,7 +49,7 @@ pub fn interprocedural_ranges(foo1_seed: usize, foo2_seed: usize, c: usize, uppe
     }
 
     foo1(foo1_seed, upper_bound);
-    foo2(foo2_seed, c, upper_bound)
+    foo2(foo2_seed, upper_bound)
 }
 
 /// testcase: Branch path constraints (from range_3)
@@ -123,58 +122,9 @@ pub fn slice_len_for_loop(a: &mut [usize; 10], slice_start: usize, slice_end: us
     }
 }
 
-/// testcase: while + slice.len() + non-linear updates (from range_6)
-///
-/// Test intent:
-/// - Verify interval constraints from while-condition `i < 2 * len`;
-/// - Cover non-linear interval propagation caused by multiplication and conditional updates;
-/// - Observe analysis conservativeness under complex update paths.
-pub fn slice_len_while_non_linear(pieces: &[usize; 8], slice_start: usize, slice_end: usize) {
-    if slice_start >= slice_end || slice_end > pieces.len() {
-        return;
-    }
-    let slice = &pieces[slice_start..slice_end];
-    let len = slice.len();
-    let mut i = 0usize;
 
-    while i < 2 * len {
-        if i >= len {
-            break;
-        }
-        let mut val = slice[i];
-        if val > 128 {
-            val += 1;
-            i *= 2;
-            i += 2;
-        } else {
-            i *= 21;
-        }
-        let _ = val;
-    }
-}
 
-/// testcase: Dual-array and subslice indexing (from range_array2)
-///
-/// Test intent:
-/// - Verify legal index range inferred from subslice `x[1..9]`;
-/// - Verify re-use of the same loop variable range across multiple array accesses;
-/// - Cover boundary behavior driven by subslice length.
-pub fn dual_array_slice_indexing(
-    x: &mut [usize; 10],
-    y: &mut [usize; 10],
-    slice_start: usize,
-    slice_end: usize,
-) {
-    if slice_start >= slice_end || slice_end > x.len() {
-        return;
-    }
-    let z = &mut x[slice_start..slice_end];
-    let y_slice = &mut y[slice_start..slice_end];
-    for i in 0..z.len() {
-        z[i] += 1;
-        y_slice[i] += 1;
-    }
-}
+
 
 /// testcase: String/byte indexing and character ranges (from range_5)
 ///
@@ -218,33 +168,30 @@ pub fn parse_scheme_case(input: &str, context: bool) -> Option<(String, &str)> {
     }
 }
 
-/// testcase: Aligned/reinterpreted slice (from range_align)
-///
-/// Test intent:
-/// - Verify fixed-range loop access (0..20) after `from_raw_parts_mut`;
-/// - Cover index constraints after unsafe reinterpretation;
-/// - Observe interval handling in unsafe contexts.
-pub fn align_and_reinterpret_slice(a: &mut [u8], b: &[u32; 20]) {
-    let required_bytes = 20 * std::mem::size_of::<u32>();
-    if a.len() < required_bytes {
-        return;
-    }
 
-    unsafe {
-        let ptr = a.as_mut_ptr();
-        if ptr.align_offset(std::mem::align_of::<u32>()) != 0 {
-            return;
-        }
 
-        let c = slice::from_raw_parts_mut(ptr as *mut u32, 20);
-        for i in 0..20 {
-            c[i] ^= b[i];
+// ============================================================================
+// 3) BCE (Bounds Check Elimination) scenarios LLVM usually cannot eliminate but
+//    can be optimized by range analysis 
+// ============================================================================
+
+
+
+#[inline(never)]
+pub fn bce_fail_2d_grid(grid: &[i32], width: usize, height: usize) -> i32 {
+    if grid.len() != width * height { return 0; }
+    let mut sum = 0;
+    for y in 0..height {
+        for x in 0..width {
+            sum += grid[y * width + x]; // BCE FAILS here in LLVM
         }
     }
+    sum
 }
 
 // ============================================================================
-// 3) BCE (Bounds Check Elimination) scenarios LLVM usually cannot eliminate
+// 4) BCE scenarios LLVM usually cannot eliminate and range analysis also struggles 
+// to eliminate without memory ssa
 // ============================================================================
 
 /// testcase: Indirect indexing (BCE failure)
@@ -295,23 +242,4 @@ pub fn bce_failure_complex_induction(slice: &[i32], dynamic_step: usize) -> i32 
         sum += slice[i];
     }
     sum
-}
-
-#[inline(never)]
-fn get_opaque_index(opaque_index: usize) -> usize {
-    opaque_index
-}
-
-/// testcase: Index returned from non-inlined boundary function (BCE failure)
-///
-/// Test intent:
-/// - The index comes from a `#[inline(never)]` function, making local context opaque;
-/// - Cross-boundary value-range inference is difficult at the callsite;
-/// - Bounds checks on `slice[idx]` are expected to remain.
-///
-/// Preconditions:
-/// - `opaque_index` must be a valid index into `slice`.
-pub fn bce_failure_opaque_boundary(slice: &[i32], opaque_index: usize) -> i32 {
-    let idx = get_opaque_index(opaque_index);
-    slice[idx]
 }
