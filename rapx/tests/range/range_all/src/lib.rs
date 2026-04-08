@@ -139,6 +139,9 @@ pub fn slice_len_while_non_linear() {
     let mut i = 0usize;
 
     while i < 2 * len {
+        if i >= len {
+            break;
+        }
         let mut val = slice[i];
         if val > 128 {
             val += 1;
@@ -162,7 +165,7 @@ pub fn dual_array_slice_indexing() {
     let mut y = [0usize; 10];
     let z = &mut x[1..9];
     for i in 0..z.len() {
-        x[i] += 1;
+        z[i] += 1;
         y[i] += 1;
     }
 }
@@ -182,7 +185,7 @@ pub fn parse_scheme_case(input: &str, context: bool) -> Option<(String, &str)> {
 
     #[inline]
     fn starts_with_ascii_alpha(string: &str) -> bool {
-        matches!(string.as_bytes()[0], b'a'..=b'z' | b'A'..=b'Z')
+        !string.is_empty() && matches!(string.as_bytes()[0], b'a'..=b'z' | b'A'..=b'Z')
     }
 
     if input.is_empty() || !starts_with_ascii_alpha(input) {
@@ -234,6 +237,10 @@ pub fn align_and_reinterpret_slice(a: &mut [u8], b: &[u32; 20]) {
 /// - `idx` 来自 `indices[i]` 的数据依赖；
 /// - LLVM 无法静态证明 `data[idx]` 总是安全；
 /// - 预期保留边界检查。
+///
+/// 前置条件：
+/// - `indices` 中的每个元素都必须是 `data` 的合法下标；
+/// - 本例关注 BCE 行为，不关注非法输入下的 panic 处理。
 pub fn bce_failure_indirect_indexing(data: &[i32], indices: &[usize]) -> i32 {
     let mut sum = 0;
     for i in 0..indices.len() {
