@@ -7,8 +7,10 @@ import tarfile
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-import tomllib
-
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:
+    import tomli as tomllib  # Python <= 3.10
 
 CRATES_API = "https://crates.io/api/v1/crates"
 
