@@ -17,9 +17,9 @@ use std::slice;
 /// - Verify joint interval updates for multiple variables (`i`, `j`, `k`) in loops;
 /// - Verify that while-conditions and loop-body assignments continuously tighten bounds;
 /// - Verify stable convergence behavior under nested loops.
-pub fn numeric_coupled_loop() {
-    let mut k = 0usize;
-    while k < 100 {
+pub fn numeric_coupled_loop(start_k: usize, upper_bound: usize) {
+    let mut k = start_k;
+    while k < upper_bound {
         let mut i = 0usize;
         let mut j = k;
         while i < j {
@@ -36,21 +36,21 @@ pub fn numeric_coupled_loop() {
 /// - Verify argument intervals are propagated from callsite to callee;
 /// - Verify return-value intervals are propagated back after callee-side loop updates;
 /// - Cover inter-procedural analysis behavior.
-pub fn interprocedural_ranges() -> usize {
-    fn foo1(mut k: usize) {
-        while k < 100 {
+pub fn interprocedural_ranges(foo1_seed: usize, foo2_seed: usize, c: usize, upper_bound: usize) -> usize {
+    fn foo1(mut k: usize, upper_bound: usize) {
+        while k < upper_bound {
             k += 1;
         }
     }
-    fn foo2(mut k: usize, _c: usize) -> usize {
-        while k < 100 {
+    fn foo2(mut k: usize, _c: usize, upper_bound: usize) -> usize {
+        while k < upper_bound {
             k += 1;
         }
         k
     }
 
-    foo1(42);
-    foo2(55, 52)
+    foo1(foo1_seed, upper_bound);
+    foo2(foo2_seed, c, upper_bound)
 }
 
 /// testcase: Branch path constraints (from range_3)
@@ -59,10 +59,7 @@ pub fn interprocedural_ranges() -> usize {
 /// - Verify path-condition constraints in if/else multi-branch control flow;
 /// - Verify interval merge behavior at join points after branch-specific updates;
 /// - Cover constraint reasoning with nested branches and comparisons.
-pub fn path_constraints_branching() {
-    let x = 1i32;
-    let mut y = 10i32;
-    let z = 0i32;
+pub fn path_constraints_branching(x: i32, mut y: i32, z: i32) -> i32 {
     if x < y {
         y += 1;
     } else {
@@ -73,7 +70,7 @@ pub fn path_constraints_branching() {
             y += 2;
         }
     }
-    let _ = y;
+    y
 }
 
 /// testcase: Recursive path (from range_4)
@@ -116,10 +113,11 @@ pub fn symbolic_interval_case(x: i32) -> i32 {
 /// - Verify inferred slice length from `&mut a[1..slice_index]`;
 /// - Verify index safety for `slice[i]` under `for i in 0..slice.len()`;
 /// - Cover the common pattern where loop upper-bound is driven by slice length.
-pub fn slice_len_for_loop() {
-    let mut a = [0usize; 10];
-    let slice_index = 5usize;
-    let slice = &mut a[1..slice_index];
+pub fn slice_len_for_loop(a: &mut [usize; 10], slice_start: usize, slice_end: usize) {
+    if slice_start >= slice_end || slice_end > a.len() {
+        return;
+    }
+    let slice = &mut a[slice_start..slice_end];
     for i in 0..slice.len() {
         slice[i] = i + 1;
     }
@@ -131,10 +129,11 @@ pub fn slice_len_for_loop() {
 /// - Verify interval constraints from while-condition `i < 2 * len`;
 /// - Cover non-linear interval propagation caused by multiplication and conditional updates;
 /// - Observe analysis conservativeness under complex update paths.
-pub fn slice_len_while_non_linear() {
-    let pieces = [42usize; 8];
-    let slice_index = 8usize;
-    let slice = &pieces[1..slice_index];
+pub fn slice_len_while_non_linear(pieces: &[usize; 8], slice_start: usize, slice_end: usize) {
+    if slice_start >= slice_end || slice_end > pieces.len() {
+        return;
+    }
+    let slice = &pieces[slice_start..slice_end];
     let len = slice.len();
     let mut i = 0usize;
 
@@ -160,10 +159,16 @@ pub fn slice_len_while_non_linear() {
 /// - Verify legal index range inferred from subslice `x[1..9]`;
 /// - Verify re-use of the same loop variable range across multiple array accesses;
 /// - Cover boundary behavior driven by subslice length.
-pub fn dual_array_slice_indexing() {
-    let mut x = [0usize; 10];
-    let mut y = [0usize; 10];
-    let z = &mut x[1..9];
+pub fn dual_array_slice_indexing(
+    x: &mut [usize; 10],
+    y: &mut [usize; 10],
+    slice_start: usize,
+    slice_end: usize,
+) {
+    if slice_start >= slice_end || slice_end > x.len() {
+        return;
+    }
+    let z = &mut x[slice_start..slice_end];
     for i in 0..z.len() {
         z[i] += 1;
         y[i] += 1;
@@ -282,8 +287,8 @@ pub fn bce_failure_complex_induction(slice: &[i32], dynamic_step: usize) -> i32 
 }
 
 #[inline(never)]
-fn get_opaque_index() -> usize {
-    42
+fn get_opaque_index(opaque_index: usize) -> usize {
+    opaque_index
 }
 
 /// testcase: Index returned from non-inlined boundary function (BCE failure)
@@ -292,7 +297,7 @@ fn get_opaque_index() -> usize {
 /// - The index comes from a `#[inline(never)]` function, making local context opaque;
 /// - Cross-boundary value-range inference is difficult at the callsite;
 /// - Bounds checks on `slice[idx]` are expected to remain.
-pub fn bce_failure_opaque_boundary(slice: &[i32]) -> i32 {
-    let idx = get_opaque_index();
+pub fn bce_failure_opaque_boundary(slice: &[i32], opaque_index: usize) -> i32 {
+    let idx = get_opaque_index(opaque_index);
     slice[idx]
 }
