@@ -169,9 +169,10 @@ pub fn dual_array_slice_indexing(
         return;
     }
     let z = &mut x[slice_start..slice_end];
+    let y_slice = &mut y[slice_start..slice_end];
     for i in 0..z.len() {
         z[i] += 1;
-        y[i] += 1;
+        y_slice[i] += 1;
     }
 }
 
@@ -224,8 +225,18 @@ pub fn parse_scheme_case(input: &str, context: bool) -> Option<(String, &str)> {
 /// - Cover index constraints after unsafe reinterpretation;
 /// - Observe interval handling in unsafe contexts.
 pub fn align_and_reinterpret_slice(a: &mut [u8], b: &[u32; 20]) {
+    let required_bytes = 20 * std::mem::size_of::<u32>();
+    if a.len() < required_bytes {
+        return;
+    }
+
     unsafe {
-        let c = slice::from_raw_parts_mut(a.as_mut_ptr() as *mut u32, 20);
+        let ptr = a.as_mut_ptr();
+        if ptr.align_offset(std::mem::align_of::<u32>()) != 0 {
+            return;
+        }
+
+        let c = slice::from_raw_parts_mut(ptr as *mut u32, 20);
         for i in 0..20 {
             c[i] ^= b[i];
         }
@@ -297,6 +308,9 @@ fn get_opaque_index(opaque_index: usize) -> usize {
 /// - The index comes from a `#[inline(never)]` function, making local context opaque;
 /// - Cross-boundary value-range inference is difficult at the callsite;
 /// - Bounds checks on `slice[idx]` are expected to remain.
+///
+/// Preconditions:
+/// - `opaque_index` must be a valid index into `slice`.
 pub fn bce_failure_opaque_boundary(slice: &[i32], opaque_index: usize) -> i32 {
     let idx = get_opaque_index(opaque_index);
     slice[idx]
