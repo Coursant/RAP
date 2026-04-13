@@ -507,9 +507,10 @@ fn test_symbolic_interval() {
     let output = running_tests_with_arg("range/range_symbolic", "-range");
 
     let expected_ranges = vec![
-        "Var: (_19.0: i32). [ Binary(AddWithOverflow, Place(_1), Constant(Val(Scalar(0x00000001), i32))) , Binary(AddWithOverflow, Place(_1), Constant(Val(Scalar(0x00000001), i32))) ]",
-        "Var: _21. [ Place(_1) , Place(_1) ]",
-        "Var: _25. [ Constant(Val(Scalar(0x00000001), i32)) , Constant(Val(Scalar(0x00000001), i32)) ]",
+        "Processing function: foo2",
+        "Binary(Add, Place(_1), Constant(Val(Scalar(0x00000001), i32)))",
+        "Processing function: const_identity_case",
+        "Var: _12. [ Place(_1) , Place(_1) ]",
     ];
 
     for expected in expected_ranges {
@@ -520,4 +521,16 @@ fn test_symbolic_interval() {
             output
         );
     }
+
+    assert!(
+        !output.contains("Binary(AddWithOverflow, Place(_1), Constant(Val(Scalar(0x00000000), i32)))"),
+        "Constant identity `x + 0` should be simplified in symbolic expression.\nFull output:\n{}",
+        output
+    );
+
+    assert!(
+        !output.contains("Binary(MulWithOverflow, Place(_1), Constant(Val(Scalar(0x00000001), i32)))"),
+        "Constant identity `x * 1` should be simplified in symbolic expression.\nFull output:\n{}",
+        output
+    );
 }
