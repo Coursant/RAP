@@ -67,6 +67,108 @@ impl<'tcx> fmt::Display for SymbExpr<'tcx> {
     }
 }
 impl<'tcx> SymbExpr<'tcx> {
+    fn const_bits(c: &Const<'tcx>) -> Option<u128> {
+        c.try_to_scalar_int().map(|s| s.to_bits(s.size()))
+    }
+
+    fn is_const_zero(expr: &SymbExpr<'tcx>) -> bool {
+        match expr {
+            SymbExpr::Constant(c) => Self::const_bits(c) == Some(0),
+            _ => false,
+        }
+    }
+
+    fn is_const_one(expr: &SymbExpr<'tcx>) -> bool {
+        match expr {
+            SymbExpr::Constant(c) => Self::const_bits(c) == Some(1),
+            _ => false,
+        }
+    }
+
+    fn try_simplify_constants(&self) -> Option<Self> {
+        match self {
+            SymbExpr::Binary(op, lhs, rhs) => match op {
+                BinOp::Add | BinOp::AddUnchecked | BinOp::AddWithOverflow => {
+                    if Self::is_const_zero(rhs) {
+                        Some((**lhs).clone())
+                    } else if Self::is_const_zero(lhs) {
+                        Some((**rhs).clone())
+                    } else {
+                        None
+                    }
+                }
+                BinOp::Sub | BinOp::SubUnchecked | BinOp::SubWithOverflow => {
+                    if Self::is_const_zero(rhs) {
+                        Some((**lhs).clone())
+                    } else {
+                        None
+                    }
+                }
+                BinOp::Mul | BinOp::MulUnchecked | BinOp::MulWithOverflow => {
+                    if Self::is_const_zero(lhs) {
+                        Some((**lhs).clone())
+                    } else if Self::is_const_zero(rhs) {
+                        Some((**rhs).clone())
+                    } else if Self::is_const_one(lhs) {
+                        Some((**rhs).clone())
+                    } else if Self::is_const_one(rhs) {
+                        Some((**lhs).clone())
+                    } else {
+                        None
+                    }
+                }
+                BinOp::Div => {
+                    if Self::is_const_one(rhs) {
+                        Some((**lhs).clone())
+                    } else {
+                        None
+                    }
+                }
+                BinOp::BitAnd => {
+                    if Self::is_const_zero(lhs) {
+                        Some((**lhs).clone())
+                    } else if Self::is_const_zero(rhs) {
+                        Some((**rhs).clone())
+                    } else {
+                        None
+                    }
+                }
+                BinOp::BitOr | BinOp::BitXor => {
+                    if Self::is_const_zero(rhs) {
+                        Some((**lhs).clone())
+                    } else if Self::is_const_zero(lhs) {
+                        Some((**rhs).clone())
+                    } else {
+                        None
+                    }
+                }
+                BinOp::Shl | BinOp::Shr => {
+                    if Self::is_const_zero(rhs) {
+                        Some((**lhs).clone())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            },
+            SymbExpr::Unary(UnOp::Neg, inner) => {
+                if let SymbExpr::Unary(UnOp::Neg, nested) = &**inner {
+                    Some((**nested).clone())
+                } else {
+                    None
+                }
+            }
+            SymbExpr::Unary(UnOp::Not, inner) => {
+                if let SymbExpr::Unary(UnOp::Not, nested) = &**inner {
+                    Some((**nested).clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn from_place_with_ctx(place: &'tcx Place<'tcx>, place_ctx: &Vec<&'tcx Place<'tcx>>) -> Self {
         let found_base = place_ctx
             .iter()
@@ -378,6 +480,11 @@ impl<'tcx> SymbExpr<'tcx> {
                 inner.simplify();
             }
             _ => {}
+        }
+
+        if let Some(simplified) = self.try_simplify_constants() {
+            *self = simplified;
+            return;
         }
 
         if let Some(simplified) = self.try_flatten_linear() {
