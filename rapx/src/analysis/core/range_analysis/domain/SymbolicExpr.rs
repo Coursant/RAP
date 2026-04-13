@@ -85,6 +85,16 @@ impl<'tcx> SymbExpr<'tcx> {
         }
     }
 
+    fn pick_zero_const(lhs: &SymbExpr<'tcx>, rhs: &SymbExpr<'tcx>) -> Option<SymbExpr<'tcx>> {
+        if Self::is_const_zero(lhs) {
+            Some(lhs.clone())
+        } else if Self::is_const_zero(rhs) {
+            Some(rhs.clone())
+        } else {
+            None
+        }
+    }
+
     fn try_simplify_constants(&self) -> Option<Self> {
         match self {
             SymbExpr::Binary(op, lhs, rhs) => match op {
@@ -105,10 +115,8 @@ impl<'tcx> SymbExpr<'tcx> {
                     }
                 }
                 BinOp::Mul | BinOp::MulUnchecked | BinOp::MulWithOverflow => {
-                    if Self::is_const_zero(lhs) {
-                        Some((**lhs).clone())
-                    } else if Self::is_const_zero(rhs) {
-                        Some((**rhs).clone())
+                    if let Some(zero) = Self::pick_zero_const(lhs, rhs) {
+                        Some(zero)
                     } else if Self::is_const_one(lhs) {
                         Some((**rhs).clone())
                     } else if Self::is_const_one(rhs) {
@@ -125,10 +133,8 @@ impl<'tcx> SymbExpr<'tcx> {
                     }
                 }
                 BinOp::BitAnd => {
-                    if Self::is_const_zero(lhs) {
-                        Some((**lhs).clone())
-                    } else if Self::is_const_zero(rhs) {
-                        Some((**rhs).clone())
+                    if let Some(zero) = Self::pick_zero_const(lhs, rhs) {
+                        Some(zero)
                     } else {
                         None
                     }
