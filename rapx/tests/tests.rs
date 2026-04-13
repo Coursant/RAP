@@ -523,13 +523,15 @@ fn test_symbolic_interval() {
     }
 
     assert!(
-        !output.contains("Binary(AddWithOverflow, Place(_1), Constant(Val(Scalar(0x00000000), i32)))"),
+        !output
+            .contains("Binary(AddWithOverflow, Place(_1), Constant(Val(Scalar(0x00000000), i32)))"),
         "Constant identity `x + 0` should be simplified in symbolic expression.\nFull output:\n{}",
         output
     );
 
     assert!(
-        !output.contains("Binary(MulWithOverflow, Place(_1), Constant(Val(Scalar(0x00000001), i32)))"),
+        !output
+            .contains("Binary(MulWithOverflow, Place(_1), Constant(Val(Scalar(0x00000001), i32)))"),
         "Constant identity `x * 1` should be simplified in symbolic expression.\nFull output:\n{}",
         output
     );

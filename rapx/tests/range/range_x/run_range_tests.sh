@@ -2,7 +2,7 @@
 
 # RAP root directory
 RAP_ROOT="/home/lcc/rust/RAP"
-TESTS_DIR="$RAP_ROOT/rapx/tests/range"
+TESTS_DIR="$RAP_ROOT/rapx/tests/range/range_x"
 
 if [ ! -d "$TESTS_DIR" ]; then
     echo "Error: Directory $TESTS_DIR does not exist."
