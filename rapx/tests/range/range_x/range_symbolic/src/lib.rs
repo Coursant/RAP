@@ -24,6 +24,13 @@ fn foo2(x: i32) -> i32 {
     return result;  // result is always z, but its upper/lower bound 
                     // symbexpr is hard to be inferred without range analysis
 }
+
+fn const_identity_case(x: i32) -> i32 {
+    let y = x + 0;
+    let z = y * 1;
+    let w = z - 0;
+    w
+}
 // fn main(){
 //     let y = 2;
 //     let x = y;
