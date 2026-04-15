@@ -8,7 +8,7 @@ use rust_intervals::NothingBetween;
 
 use crate::analysis::core::range_analysis::domain::ConstraintGraph::ConstraintGraph;
 use crate::analysis::core::range_analysis::domain::SymbolicExpr::{
-    BasicInterval, IntervalType, IntervalTypeTrait, SymbExpr,
+    BasicInterval, IntervalType, IntervalTypeTrait, SymbExpr, SymbInterval,
 };
 use crate::analysis::core::range_analysis::{Range, RangeType};
 use crate::{rap_debug, rap_trace};
@@ -1052,6 +1052,13 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> VarNode<'tcx, T> {
                 symb_expr.clone(),
                 symb_expr.clone(),
             )),
+            abstract_state: '?',
+        }
+    }
+    pub fn new_syminterval(v: &'tcx Place<'tcx>, symb_interval: SymbInterval<'tcx, T>) -> Self {
+        Self {
+            v,
+            interval: IntervalType::Symb(symb_interval.clone()),
             abstract_state: '?',
         }
     }

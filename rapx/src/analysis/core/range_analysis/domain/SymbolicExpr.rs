@@ -39,6 +39,12 @@ pub enum BoundMode {
     Upper,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Extremum {
+    Min,
+    Max,
+}
+
 impl BoundMode {
     fn flip(self) -> Self {
         match self {
@@ -50,6 +56,10 @@ impl BoundMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SymbExpr<'tcx> {
     Constant(Const<'tcx>),
+
+    Integer(i128),
+
+    Extremum(Extremum),
 
     Place(&'tcx Place<'tcx>),
 
@@ -67,13 +77,36 @@ impl<'tcx> fmt::Display for SymbExpr<'tcx> {
     }
 }
 impl<'tcx> SymbExpr<'tcx> {
+    pub fn min_extremum() -> Self {
+        SymbExpr::Extremum(Extremum::Min)
+    }
+
+    pub fn max_extremum() -> Self {
+        SymbExpr::Extremum(Extremum::Max)
+    }
+
     fn const_bits(c: &Const<'tcx>) -> Option<u128> {
         c.try_to_scalar_int().map(|s| s.to_bits(s.size()))
+    }
+
+    fn extremum_kind(expr: &SymbExpr<'tcx>) -> Option<Extremum> {
+        match expr {
+            SymbExpr::Extremum(kind) => Some(*kind),
+            _ => None,
+        }
+    }
+
+    fn flip_extremum(kind: Extremum) -> Extremum {
+        match kind {
+            Extremum::Min => Extremum::Max,
+            Extremum::Max => Extremum::Min,
+        }
     }
 
     fn is_const_zero(expr: &SymbExpr<'tcx>) -> bool {
         match expr {
             SymbExpr::Constant(c) => Self::const_bits(c) == Some(0),
+            SymbExpr::Integer(v) => *v == 0,
             _ => false,
         }
     }
@@ -81,6 +114,7 @@ impl<'tcx> SymbExpr<'tcx> {
     fn is_const_one(expr: &SymbExpr<'tcx>) -> bool {
         match expr {
             SymbExpr::Constant(c) => Self::const_bits(c) == Some(1),
+            SymbExpr::Integer(v) => *v == 1,
             _ => false,
         }
     }
@@ -99,6 +133,23 @@ impl<'tcx> SymbExpr<'tcx> {
         match self {
             SymbExpr::Binary(op, lhs, rhs) => match op {
                 BinOp::Add | BinOp::AddUnchecked | BinOp::AddWithOverflow => {
+                    match (Self::extremum_kind(lhs), Self::extremum_kind(rhs)) {
+                        (Some(Extremum::Min), Some(Extremum::Max))
+                        | (Some(Extremum::Max), Some(Extremum::Min)) => {
+                            return Some(SymbExpr::Unknown);
+                        }
+                        (Some(kind), None) | (None, Some(kind)) => {
+                            return Some(SymbExpr::Extremum(kind));
+                        }
+                        (Some(Extremum::Min), Some(Extremum::Min)) => {
+                            return Some(SymbExpr::Extremum(Extremum::Min));
+                        }
+                        (Some(Extremum::Max), Some(Extremum::Max)) => {
+                            return Some(SymbExpr::Extremum(Extremum::Max));
+                        }
+                        (None, None) => {}
+                    }
+
                     if Self::is_const_zero(rhs) {
                         Some((**lhs).clone())
                     } else if Self::is_const_zero(lhs) {
@@ -108,6 +159,27 @@ impl<'tcx> SymbExpr<'tcx> {
                     }
                 }
                 BinOp::Sub | BinOp::SubUnchecked | BinOp::SubWithOverflow => {
+                    match (Self::extremum_kind(lhs), Self::extremum_kind(rhs)) {
+                        (Some(Extremum::Max), Some(Extremum::Min)) => {
+                            return Some(SymbExpr::Extremum(Extremum::Max));
+                        }
+                        (Some(Extremum::Min), Some(Extremum::Max)) => {
+                            return Some(SymbExpr::Extremum(Extremum::Min));
+                        }
+                        (Some(Extremum::Min), Some(Extremum::Min))
+                        | (Some(Extremum::Max), Some(Extremum::Max)) => {
+                            return Some(SymbExpr::Unknown);
+                        }
+                        (Some(kind), None) => return Some(SymbExpr::Extremum(kind)),
+                        (None, Some(Extremum::Max)) => {
+                            return Some(SymbExpr::Extremum(Extremum::Min));
+                        }
+                        (None, Some(Extremum::Min)) => {
+                            return Some(SymbExpr::Extremum(Extremum::Max));
+                        }
+                        (None, None) => {}
+                    }
+
                     if Self::is_const_zero(rhs) {
                         Some((**lhs).clone())
                     } else {
@@ -115,6 +187,36 @@ impl<'tcx> SymbExpr<'tcx> {
                     }
                 }
                 BinOp::Mul | BinOp::MulUnchecked | BinOp::MulWithOverflow => {
+                    match (Self::extremum_kind(lhs), Self::extremum_kind(rhs)) {
+                        (Some(lhs_kind), Some(rhs_kind)) => {
+                            return Some(match (lhs_kind, rhs_kind) {
+                                (Extremum::Max, Extremum::Max) | (Extremum::Min, Extremum::Min) => {
+                                    SymbExpr::Extremum(Extremum::Max)
+                                }
+                                (Extremum::Max, Extremum::Min) | (Extremum::Min, Extremum::Max) => {
+                                    SymbExpr::Extremum(Extremum::Min)
+                                }
+                            });
+                        }
+                        (Some(_), None) => {
+                            if Self::is_const_zero(rhs) {
+                                return Some(SymbExpr::Unknown);
+                            }
+                            if Self::is_const_one(rhs) {
+                                return Some((**lhs).clone());
+                            }
+                        }
+                        (None, Some(_)) => {
+                            if Self::is_const_zero(lhs) {
+                                return Some(SymbExpr::Unknown);
+                            }
+                            if Self::is_const_one(lhs) {
+                                return Some((**rhs).clone());
+                            }
+                        }
+                        (None, None) => {}
+                    }
+
                     if let Some(zero) = Self::pick_zero_const(lhs, rhs) {
                         Some(zero)
                     } else if Self::is_const_one(lhs) {
@@ -160,6 +262,8 @@ impl<'tcx> SymbExpr<'tcx> {
             SymbExpr::Unary(UnOp::Neg, inner) => {
                 if let SymbExpr::Unary(UnOp::Neg, nested) = &**inner {
                     Some((**nested).clone())
+                } else if let Some(kind) = Self::extremum_kind(inner) {
+                    Some(SymbExpr::Extremum(Self::flip_extremum(kind)))
                 } else {
                     None
                 }

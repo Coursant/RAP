@@ -592,7 +592,7 @@ where
         &self,
         rvalue: &'tcx Rvalue<'tcx>,
     ) -> Option<IntervalType<'tcx, T>> {
-        let (source, cmp_op) = match rvalue {
+        let (source, rhs_const, rhs_const_expr, cmp_op) = match rvalue {
             Rvalue::Aggregate(kind, operands) => match **kind {
                 AggregateKind::Adt(def_id, _, _, _, _) if def_id == self.essa => {
                     if operands.len() < 3 {
@@ -604,14 +604,36 @@ where
                         _ => return None,
                     };
 
+                    let rhs_const = operands[FieldIdx::from_usize(1)]
+                        .constant()
+                        .and_then(|c| Self::convert_const(&c.const_));
+
+                    let rhs_const_expr = operands[FieldIdx::from_usize(1)]
+                        .constant()
+                        .map(|c| SymbExpr::Constant(c.const_));
+
                     let cmp_code = Self::operand_to_u64(&operands[FieldIdx::from_usize(2)])?;
                     let cmp_op = Self::decode_essa_cmp_op(cmp_code)?;
-                    (source, cmp_op)
+                    (source, rhs_const, rhs_const_expr, cmp_op)
                 }
                 _ => return None,
             },
             _ => return None,
         };
+
+        // eSSA in "variable + constant" form stores [place, const, cmp_code, ...].
+        // Build branch interval directly from cmp_code and the constant.
+        if let Some(c) = rhs_const {
+            let mut range = Self::apply_comparison(
+                c,
+                rhs_const_expr.unwrap_or(SymbExpr::Unknown),
+                cmp_op,
+                true,
+                false,
+            );
+            range.set_regular();
+            return Some(IntervalType::Basic(BasicInterval::new(range)));
+        }
 
         let vbm = self.values_branchmap.get(source)?;
         let t = vbm.get_itv_t();
@@ -648,22 +670,31 @@ where
                     VarNode::new_symb(v, SymbExpr::from_rvalue_ssa(rvalue, place_ctx.clone()))
                 }
                 AggregateKind::Adt(def_id, _, _, _, _) if def_id == self.essa => {
-                    let sym_itv = self.extract_essa_syminterval_from_rvalue(rvalue);
-                    let essa_sym = sym_itv.as_ref().and_then(|itv| {
-                        if let IntervalType::Symb(sym) = itv {
-                            Some((sym.get_bound(), sym.get_operation()))
-                        } else {
-                            None
+                    match self.extract_essa_syminterval_from_rvalue(rvalue) {
+                        Some(IntervalType::Symb(sym)) => {
+                            let essa_node = VarNode::new_syminterval(v, sym);
+                            rap_debug!("essa_node before setting interval: {:?}", essa_node);
+                            essa_node
                         }
-                    });
-
-                    let mut essa_node = VarNode::new_symb(
-                        v,
-                        SymbExpr::from_rvalue_essa(rvalue, place_ctx.clone(), essa_sym),
-                    );
-                    rap_debug!("essa_node before setting interval: {:?}", essa_node);
-
-                    essa_node
+                        Some(IntervalType::Basic(basic)) => {
+                            let mut essa_node = VarNode::new(v);
+                            essa_node.set_interval(IntervalType::Basic(basic));
+                            rap_debug!(
+                                "essa_node (basic interval) before setting interval: {:?}",
+                                essa_node
+                            );
+                            essa_node
+                        }
+                        None => {
+                            // Keep analysis progressing even if ESSA decoding fails unexpectedly.
+                            rap_debug!(
+                                "Warning: failed to decode ESSA interval for {:?}, fallback to symbolic expression from rvalue {:?}",
+                                v,
+                                rvalue
+                            );
+                            VarNode::new_symb(v, SymbExpr::from_rvalue(rvalue, place_ctx.clone()))
+                        }
+                    }
                 }
                 _ => VarNode::new_symb(v, SymbExpr::from_rvalue(rvalue, place_ctx.clone())),
             },
@@ -931,10 +962,21 @@ where
                         rap_trace!("cmp_op {:?}\n", cmp_op);
                         rap_trace!("const_in_left {:?}\n", const_in_left);
 
-                        let mut true_range =
-                            Self::apply_comparison(value.clone(), cmp_op, true, const_in_left);
-                        let mut false_range =
-                            Self::apply_comparison(value.clone(), cmp_op, false, const_in_left);
+                        let const_expr = SymbExpr::Constant(c.const_);
+                        let mut true_range = Self::apply_comparison(
+                            value.clone(),
+                            const_expr.clone(),
+                            cmp_op,
+                            true,
+                            const_in_left,
+                        );
+                        let mut false_range = Self::apply_comparison(
+                            value.clone(),
+                            const_expr,
+                            cmp_op,
+                            false,
+                            const_in_left,
+                        );
 
                         true_range.set_regular();
                         false_range.set_regular();
@@ -1057,52 +1099,136 @@ where
 
     fn apply_comparison<U: IntervalArithmetic>(
         constant: U,
+        const_expr: SymbExpr<'tcx>,
         cmp_op: BinOp,
         is_true_branch: bool,
         const_in_left: bool,
     ) -> Range<'tcx, U> {
+        let one_expr = SymbExpr::Integer(1);
+        let const_minus_one_expr = SymbExpr::Binary(
+            BinOp::Sub,
+            Box::new(const_expr.clone()),
+            Box::new(one_expr.clone()),
+        );
+        let const_plus_one_expr = SymbExpr::Binary(
+            BinOp::Add,
+            Box::new(const_expr.clone()),
+            Box::new(one_expr.clone()),
+        );
+        let max_minus_one_expr = SymbExpr::Binary(
+            BinOp::Sub,
+            Box::new(SymbExpr::max_extremum()),
+            Box::new(one_expr),
+        );
+
         match cmp_op {
             BinOp::Lt => {
                 if is_true_branch ^ const_in_left {
-                    Range::new(U::min_value(), constant.sub(U::one()), RangeType::Unknown)
+                    Range::new_symb(
+                        U::min_value(),
+                        constant.sub(U::one()),
+                        SymbExpr::min_extremum(),
+                        const_minus_one_expr,
+                        RangeType::Unknown,
+                    )
                 } else {
-                    Range::new(constant, U::max_value(), RangeType::Unknown)
+                    Range::new_symb(
+                        constant,
+                        U::max_value(),
+                        const_expr,
+                        SymbExpr::max_extremum(),
+                        RangeType::Unknown,
+                    )
                 }
             }
 
             BinOp::Le => {
                 if is_true_branch ^ const_in_left {
-                    Range::new(U::min_value(), constant, RangeType::Unknown)
+                    Range::new_symb(
+                        U::min_value(),
+                        constant,
+                        SymbExpr::min_extremum(),
+                        const_expr.clone(),
+                        RangeType::Unknown,
+                    )
                 } else {
-                    Range::new(constant.add(U::one()), U::max_value(), RangeType::Unknown)
+                    Range::new_symb(
+                        constant.add(U::one()),
+                        U::max_value(),
+                        const_plus_one_expr.clone(),
+                        SymbExpr::max_extremum(),
+                        RangeType::Unknown,
+                    )
                 }
             }
 
             BinOp::Gt => {
                 if is_true_branch ^ const_in_left {
-                    Range::new(U::min_value(), constant, RangeType::Unknown)
+                    Range::new_symb(
+                        U::min_value(),
+                        constant,
+                        SymbExpr::min_extremum(),
+                        const_expr.clone(),
+                        RangeType::Unknown,
+                    )
                 } else {
-                    Range::new(constant.add(U::one()), U::max_value(), RangeType::Unknown)
+                    Range::new_symb(
+                        constant.add(U::one()),
+                        U::max_value(),
+                        const_plus_one_expr,
+                        SymbExpr::max_extremum(),
+                        RangeType::Unknown,
+                    )
                 }
             }
 
             BinOp::Ge => {
                 if is_true_branch ^ const_in_left {
-                    Range::new(U::min_value(), constant, RangeType::Unknown)
+                    Range::new_symb(
+                        U::min_value(),
+                        constant,
+                        SymbExpr::min_extremum(),
+                        const_expr.clone(),
+                        RangeType::Unknown,
+                    )
                 } else {
-                    Range::new(constant, U::max_value().sub(U::one()), RangeType::Unknown)
+                    Range::new_symb(
+                        constant,
+                        U::max_value().sub(U::one()),
+                        const_expr.clone(),
+                        max_minus_one_expr,
+                        RangeType::Unknown,
+                    )
                 }
             }
 
             BinOp::Eq => {
                 if is_true_branch ^ const_in_left {
-                    Range::new(U::min_value(), constant, RangeType::Unknown)
+                    Range::new_symb(
+                        U::min_value(),
+                        constant,
+                        SymbExpr::min_extremum(),
+                        const_expr,
+                        RangeType::Unknown,
+                    )
                 } else {
-                    Range::new(constant, U::max_value(), RangeType::Unknown)
+                    Range::new_symb(
+                        constant,
+                        U::max_value(),
+                        const_expr.clone(),
+                        SymbExpr::max_extremum(),
+                        RangeType::Unknown,
+                    )
                 }
             }
 
-            _ => Range::new(constant.clone(), constant.clone(), RangeType::Empty),
+            _ => Range::new_symb(
+                constant.clone(),
+                constant.clone(),
+                const_expr.clone(),
+                const_expr,
+                RangeType::Empty,
+            ),
         }
     }
     // ...existing code...
