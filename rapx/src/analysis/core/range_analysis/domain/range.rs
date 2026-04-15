@@ -76,8 +76,8 @@ where
     pub fn new_symb(
         lb: T,
         ub: T,
-        lower_expr: SymbExpr<'tcx>,
-        upper_expr: SymbExpr<'tcx>,
+        lower_expr: SymbExpr<'tcx, T>,
+        upper_expr: SymbExpr<'tcx, T>,
         rtype: RangeType,
     ) -> Self {
         Self {
@@ -118,10 +118,10 @@ where
     pub fn get_upper(&self) -> T {
         self.upper.clone()
     }
-    pub fn get_lower_expr(&self) -> SymbExpr<'tcx> {
+    pub fn get_lower_expr(&self) -> SymbExpr<'tcx, T> {
         self.lower_expr.clone()
     }
-    pub fn get_upper_expr(&self) -> SymbExpr<'tcx> {
+    pub fn get_upper_expr(&self) -> SymbExpr<'tcx, T> {
         self.upper_expr.clone()
     }
     // Check if the range type is unknown

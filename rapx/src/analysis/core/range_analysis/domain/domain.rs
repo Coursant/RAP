@@ -1045,7 +1045,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> VarNode<'tcx, T> {
             abstract_state: '?',
         }
     }
-    pub fn new_symb(v: &'tcx Place<'tcx>, symb_expr: SymbExpr<'tcx>) -> Self {
+    pub fn new_symb(v: &'tcx Place<'tcx>, symb_expr: SymbExpr<'tcx, T>) -> Self {
         Self {
             v,
             interval: IntervalType::Basic(BasicInterval::new_symb(

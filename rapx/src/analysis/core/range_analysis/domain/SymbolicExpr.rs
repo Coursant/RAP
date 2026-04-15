@@ -20,8 +20,8 @@ use rustc_hir::def_id::DefId;
 use rustc_index::IndexVec;
 use rustc_middle::mir::coverage::Op;
 use rustc_middle::mir::{
-    BasicBlock, BinOp, BorrowKind, CastKind, Const, Local, LocalDecl, Operand, Place, Rvalue,
-    Statement, StatementKind, Terminator, UnOp,
+    BasicBlock, BinOp, BorrowKind, CastKind, Local, LocalDecl, Operand, Place, Rvalue, Statement,
+    StatementKind, Terminator, UnOp,
 };
 use rustc_middle::ty::{ScalarInt, Ty};
 use rustc_span::sym::no_default_passes;
@@ -39,12 +39,6 @@ pub enum BoundMode {
     Upper,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Extremum {
-    Min,
-    Max,
-}
-
 impl BoundMode {
     fn flip(self) -> Self {
         match self {
@@ -53,73 +47,55 @@ impl BoundMode {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SymbExpr<'tcx> {
-    Constant(Const<'tcx>),
-
-    Integer(i128),
-
-    Extremum(Extremum),
+#[derive(Debug, Clone, PartialEq)]
+pub enum SymbExpr<'tcx, T> {
+    Value(T),
 
     Place(&'tcx Place<'tcx>),
 
-    Binary(BinOp, Box<SymbExpr<'tcx>>, Box<SymbExpr<'tcx>>),
+    Binary(BinOp, Box<SymbExpr<'tcx, T>>, Box<SymbExpr<'tcx, T>>),
 
-    Unary(UnOp, Box<SymbExpr<'tcx>>),
+    Unary(UnOp, Box<SymbExpr<'tcx, T>>),
 
-    Cast(CastKind, Box<SymbExpr<'tcx>>, Ty<'tcx>),
+    Cast(CastKind, Box<SymbExpr<'tcx, T>>, Ty<'tcx>),
 
     Unknown,
 }
-impl<'tcx> fmt::Display for SymbExpr<'tcx> {
+impl<'tcx, T: fmt::Debug> fmt::Display for SymbExpr<'tcx, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self)
     }
 }
-impl<'tcx> SymbExpr<'tcx> {
-    pub fn min_extremum() -> Self {
-        SymbExpr::Extremum(Extremum::Min)
+impl<'tcx, T> SymbExpr<'tcx, T>
+where
+    T: IntervalArithmetic + Clone + PartialEq,
+{
+    pub fn min_value_expr() -> Self {
+        SymbExpr::Value(T::min_value())
     }
 
-    pub fn max_extremum() -> Self {
-        SymbExpr::Extremum(Extremum::Max)
+    pub fn max_value_expr() -> Self {
+        SymbExpr::Value(T::max_value())
     }
 
-    fn const_bits(c: &Const<'tcx>) -> Option<u128> {
-        c.try_to_scalar_int().map(|s| s.to_bits(s.size()))
-    }
-
-    fn extremum_kind(expr: &SymbExpr<'tcx>) -> Option<Extremum> {
+    fn is_const_zero(expr: &SymbExpr<'tcx, T>) -> bool {
         match expr {
-            SymbExpr::Extremum(kind) => Some(*kind),
-            _ => None,
-        }
-    }
-
-    fn flip_extremum(kind: Extremum) -> Extremum {
-        match kind {
-            Extremum::Min => Extremum::Max,
-            Extremum::Max => Extremum::Min,
-        }
-    }
-
-    fn is_const_zero(expr: &SymbExpr<'tcx>) -> bool {
-        match expr {
-            SymbExpr::Constant(c) => Self::const_bits(c) == Some(0),
-            SymbExpr::Integer(v) => *v == 0,
+            SymbExpr::Value(v) => *v == T::zero(),
             _ => false,
         }
     }
 
-    fn is_const_one(expr: &SymbExpr<'tcx>) -> bool {
+    fn is_const_one(expr: &SymbExpr<'tcx, T>) -> bool {
         match expr {
-            SymbExpr::Constant(c) => Self::const_bits(c) == Some(1),
-            SymbExpr::Integer(v) => *v == 1,
+            SymbExpr::Value(v) => *v == T::one(),
             _ => false,
         }
     }
 
-    fn pick_zero_const(lhs: &SymbExpr<'tcx>, rhs: &SymbExpr<'tcx>) -> Option<SymbExpr<'tcx>> {
+    fn pick_zero_const(
+        lhs: &SymbExpr<'tcx, T>,
+        rhs: &SymbExpr<'tcx, T>,
+    ) -> Option<SymbExpr<'tcx, T>> {
         if Self::is_const_zero(lhs) {
             Some(lhs.clone())
         } else if Self::is_const_zero(rhs) {
@@ -133,23 +109,6 @@ impl<'tcx> SymbExpr<'tcx> {
         match self {
             SymbExpr::Binary(op, lhs, rhs) => match op {
                 BinOp::Add | BinOp::AddUnchecked | BinOp::AddWithOverflow => {
-                    match (Self::extremum_kind(lhs), Self::extremum_kind(rhs)) {
-                        (Some(Extremum::Min), Some(Extremum::Max))
-                        | (Some(Extremum::Max), Some(Extremum::Min)) => {
-                            return Some(SymbExpr::Unknown);
-                        }
-                        (Some(kind), None) | (None, Some(kind)) => {
-                            return Some(SymbExpr::Extremum(kind));
-                        }
-                        (Some(Extremum::Min), Some(Extremum::Min)) => {
-                            return Some(SymbExpr::Extremum(Extremum::Min));
-                        }
-                        (Some(Extremum::Max), Some(Extremum::Max)) => {
-                            return Some(SymbExpr::Extremum(Extremum::Max));
-                        }
-                        (None, None) => {}
-                    }
-
                     if Self::is_const_zero(rhs) {
                         Some((**lhs).clone())
                     } else if Self::is_const_zero(lhs) {
@@ -159,27 +118,6 @@ impl<'tcx> SymbExpr<'tcx> {
                     }
                 }
                 BinOp::Sub | BinOp::SubUnchecked | BinOp::SubWithOverflow => {
-                    match (Self::extremum_kind(lhs), Self::extremum_kind(rhs)) {
-                        (Some(Extremum::Max), Some(Extremum::Min)) => {
-                            return Some(SymbExpr::Extremum(Extremum::Max));
-                        }
-                        (Some(Extremum::Min), Some(Extremum::Max)) => {
-                            return Some(SymbExpr::Extremum(Extremum::Min));
-                        }
-                        (Some(Extremum::Min), Some(Extremum::Min))
-                        | (Some(Extremum::Max), Some(Extremum::Max)) => {
-                            return Some(SymbExpr::Unknown);
-                        }
-                        (Some(kind), None) => return Some(SymbExpr::Extremum(kind)),
-                        (None, Some(Extremum::Max)) => {
-                            return Some(SymbExpr::Extremum(Extremum::Min));
-                        }
-                        (None, Some(Extremum::Min)) => {
-                            return Some(SymbExpr::Extremum(Extremum::Max));
-                        }
-                        (None, None) => {}
-                    }
-
                     if Self::is_const_zero(rhs) {
                         Some((**lhs).clone())
                     } else {
@@ -187,36 +125,6 @@ impl<'tcx> SymbExpr<'tcx> {
                     }
                 }
                 BinOp::Mul | BinOp::MulUnchecked | BinOp::MulWithOverflow => {
-                    match (Self::extremum_kind(lhs), Self::extremum_kind(rhs)) {
-                        (Some(lhs_kind), Some(rhs_kind)) => {
-                            return Some(match (lhs_kind, rhs_kind) {
-                                (Extremum::Max, Extremum::Max) | (Extremum::Min, Extremum::Min) => {
-                                    SymbExpr::Extremum(Extremum::Max)
-                                }
-                                (Extremum::Max, Extremum::Min) | (Extremum::Min, Extremum::Max) => {
-                                    SymbExpr::Extremum(Extremum::Min)
-                                }
-                            });
-                        }
-                        (Some(_), None) => {
-                            if Self::is_const_zero(rhs) {
-                                return Some(SymbExpr::Unknown);
-                            }
-                            if Self::is_const_one(rhs) {
-                                return Some((**lhs).clone());
-                            }
-                        }
-                        (None, Some(_)) => {
-                            if Self::is_const_zero(lhs) {
-                                return Some(SymbExpr::Unknown);
-                            }
-                            if Self::is_const_one(lhs) {
-                                return Some((**rhs).clone());
-                            }
-                        }
-                        (None, None) => {}
-                    }
-
                     if let Some(zero) = Self::pick_zero_const(lhs, rhs) {
                         Some(zero)
                     } else if Self::is_const_one(lhs) {
@@ -262,8 +170,8 @@ impl<'tcx> SymbExpr<'tcx> {
             SymbExpr::Unary(UnOp::Neg, inner) => {
                 if let SymbExpr::Unary(UnOp::Neg, nested) = &**inner {
                     Some((**nested).clone())
-                } else if let Some(kind) = Self::extremum_kind(inner) {
-                    Some(SymbExpr::Extremum(Self::flip_extremum(kind)))
+                } else if let SymbExpr::Value(v) = &**inner {
+                    Some(SymbExpr::Value(T::zero().sub(*v)))
                 } else {
                     None
                 }
@@ -293,14 +201,17 @@ impl<'tcx> SymbExpr<'tcx> {
     fn first_aggregate_operand_expr(
         operands: &'tcx IndexVec<FieldIdx, Operand<'tcx>>,
         place_ctx: &Vec<&'tcx Place<'tcx>>,
-    ) -> Self {
+    ) -> Self
+    where
+        T: ConstConvert,
+    {
         operands
             .iter()
             .find_map(|operand| match operand {
                 Operand::Copy(place) | Operand::Move(place) => {
                     Some(Self::from_place_with_ctx(&place, place_ctx))
                 }
-                Operand::Constant(c) => Some(SymbExpr::Constant(c.const_)),
+                Operand::Constant(c) => T::from_const(&c.const_).map(SymbExpr::Value),
             })
             .unwrap_or(SymbExpr::Unknown)
     }
@@ -341,7 +252,10 @@ impl<'tcx> SymbExpr<'tcx> {
         expr
     }
 
-    pub fn from_operand(op: &'tcx Operand<'tcx>, place_ctx: &Vec<&'tcx Place<'tcx>>) -> Self {
+    pub fn from_operand(op: &'tcx Operand<'tcx>, place_ctx: &Vec<&'tcx Place<'tcx>>) -> Self
+    where
+        T: ConstConvert,
+    {
         match op {
             Operand::Copy(place) | Operand::Move(place) => {
                 let found_base = place_ctx
@@ -354,11 +268,16 @@ impl<'tcx> SymbExpr<'tcx> {
                     None => SymbExpr::Place(place),
                 }
             }
-            Operand::Constant(c) => SymbExpr::Constant(c.const_),
+            Operand::Constant(c) => T::from_const(&c.const_)
+                .map(SymbExpr::Value)
+                .unwrap_or(SymbExpr::Unknown),
         }
     }
 
-    pub fn from_rvalue(rvalue: &'tcx Rvalue<'tcx>, place_ctx: Vec<&'tcx Place<'tcx>>) -> Self {
+    pub fn from_rvalue(rvalue: &'tcx Rvalue<'tcx>, place_ctx: Vec<&'tcx Place<'tcx>>) -> Self
+    where
+        T: ConstConvert,
+    {
         match rvalue {
             Rvalue::Use(op) => Self::from_operand(op, &place_ctx),
             Rvalue::BinaryOp(bin_op, box (lhs, rhs)) => {
@@ -401,7 +320,10 @@ impl<'tcx> SymbExpr<'tcx> {
         }
     }
 
-    pub fn from_rvalue_ssa(rvalue: &'tcx Rvalue<'tcx>, place_ctx: Vec<&'tcx Place<'tcx>>) -> Self {
+    pub fn from_rvalue_ssa(rvalue: &'tcx Rvalue<'tcx>, place_ctx: Vec<&'tcx Place<'tcx>>) -> Self
+    where
+        T: ConstConvert,
+    {
         match rvalue {
             Rvalue::Aggregate(_, operands) => {
                 Self::first_aggregate_operand_expr(operands, &place_ctx)
@@ -414,7 +336,10 @@ impl<'tcx> SymbExpr<'tcx> {
         rvalue: &'tcx Rvalue<'tcx>,
         place_ctx: Vec<&'tcx Place<'tcx>>,
         sym_itv: Option<(&'tcx Place<'tcx>, BinOp)>,
-    ) -> Self {
+    ) -> Self
+    where
+        T: ConstConvert,
+    {
         match rvalue {
             Rvalue::Aggregate(_, operands) => {
                 let lhs = Self::first_aggregate_operand_expr(operands, &place_ctx);
@@ -491,25 +416,23 @@ impl<'tcx> SymbExpr<'tcx> {
     //         }
     //     }
     // }
-    pub fn resolve_upper_bound<T: IntervalArithmetic + ConstConvert + Debug + Clone + PartialEq>(
-        &mut self,
-        vars: &VarNodes<'tcx, T>,
-    ) {
+    pub fn resolve_upper_bound(&mut self, vars: &VarNodes<'tcx, T>)
+    where
+        T: ConstConvert + Debug,
+    {
         self.resolve_recursive(vars, 0, BoundMode::Upper);
     }
-    pub fn resolve_lower_bound<T: IntervalArithmetic + ConstConvert + Debug + Clone + PartialEq>(
-        &mut self,
-        vars: &VarNodes<'tcx, T>,
-    ) {
+    pub fn resolve_lower_bound(&mut self, vars: &VarNodes<'tcx, T>)
+    where
+        T: ConstConvert + Debug,
+    {
         self.resolve_recursive(vars, 0, BoundMode::Lower);
     }
 
-    fn resolve_recursive<T: IntervalArithmetic + ConstConvert + Debug + Clone + PartialEq>(
-        &mut self,
-        vars: &VarNodes<'tcx, T>,
-        depth: usize,
-        mode: BoundMode,
-    ) {
+    fn resolve_recursive(&mut self, vars: &VarNodes<'tcx, T>, depth: usize, mode: BoundMode)
+    where
+        T: ConstConvert + Debug,
+    {
         const MAX_DEPTH: usize = 10;
         if depth > MAX_DEPTH {
             *self = SymbExpr::Unknown;
@@ -561,7 +484,7 @@ impl<'tcx> SymbExpr<'tcx> {
 
                     match target_expr {
                         SymbExpr::Unknown => *self = SymbExpr::Unknown,
-                        SymbExpr::Constant(c) => *self = SymbExpr::Constant(c.clone()),
+                        SymbExpr::Value(v) => *self = SymbExpr::Value(v.clone()),
                         expr => {
                             if let SymbExpr::Place(target_place) = expr {
                                 if target_place == place {
@@ -624,7 +547,7 @@ impl<'tcx> SymbExpr<'tcx> {
         self.extract_linear_terms(1, &mut terms);
 
         // 合并同类项 (遍历寻找 PartialEq 相等的项，累加系数)
-        let mut merged: Vec<(i128, SymbExpr<'tcx>)> = Vec::new();
+        let mut merged: Vec<(i128, SymbExpr<'tcx, T>)> = Vec::new();
         for (sign, term) in terms {
             if let Some(existing) = merged.iter_mut().find(|(_, t)| t == &term) {
                 existing.0 += sign;
@@ -665,7 +588,7 @@ impl<'tcx> SymbExpr<'tcx> {
         }
     }
 
-    fn extract_linear_terms(&self, sign: i128, terms: &mut Vec<(i128, SymbExpr<'tcx>)>) {
+    fn extract_linear_terms(&self, sign: i128, terms: &mut Vec<(i128, SymbExpr<'tcx, T>)>) {
         match self {
             SymbExpr::Binary(op, box lhs, box rhs) => match op {
                 BinOp::Add | BinOp::AddUnchecked | BinOp::AddWithOverflow => {
@@ -685,7 +608,7 @@ impl<'tcx> SymbExpr<'tcx> {
         }
     }
 
-    fn build_sum_tree(mut terms: Vec<SymbExpr<'tcx>>) -> Option<SymbExpr<'tcx>> {
+    fn build_sum_tree(mut terms: Vec<SymbExpr<'tcx, T>>) -> Option<SymbExpr<'tcx, T>> {
         if terms.is_empty() {
             return None;
         }
@@ -713,8 +636,8 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> fmt::Display for Interv
 pub trait IntervalTypeTrait<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     fn get_range(&self) -> &Range<'tcx, T>;
     fn set_range(&mut self, new_range: Range<'tcx, T>);
-    fn get_lower_expr(&self) -> &SymbExpr<'tcx>;
-    fn get_upper_expr(&self) -> &SymbExpr<'tcx>;
+    fn get_lower_expr(&self) -> &SymbExpr<'tcx, T>;
+    fn get_upper_expr(&self) -> &SymbExpr<'tcx, T>;
 }
 impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> IntervalTypeTrait<'tcx, T>
     for IntervalType<'tcx, T>
@@ -732,14 +655,14 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> IntervalTypeTrait<'tcx,
             IntervalType::Symb(s) => s.set_range(new_range),
         }
     }
-    fn get_lower_expr(&self) -> &SymbExpr<'tcx> {
+    fn get_lower_expr(&self) -> &SymbExpr<'tcx, T> {
         match self {
             IntervalType::Basic(b) => b.get_lower_expr(),
             IntervalType::Symb(s) => s.get_lower_expr(),
         }
     }
 
-    fn get_upper_expr(&self) -> &SymbExpr<'tcx> {
+    fn get_upper_expr(&self) -> &SymbExpr<'tcx, T> {
         match self {
             IntervalType::Basic(b) => b.get_upper_expr(),
             IntervalType::Symb(s) => s.get_upper_expr(),
@@ -756,7 +679,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicInterval<'tcx, T> 
     pub fn new(range: Range<'tcx, T>) -> Self {
         Self { range }
     }
-    pub fn new_symb(lower: SymbExpr<'tcx>, upper: SymbExpr<'tcx>) -> Self {
+    pub fn new_symb(lower: SymbExpr<'tcx, T>, upper: SymbExpr<'tcx, T>) -> Self {
         Self {
             range: Range {
                 rtype: RangeType::Regular,
@@ -790,11 +713,11 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> IntervalTypeTrait<'tcx,
             self.range.set_empty();
         }
     }
-    fn get_lower_expr(&self) -> &SymbExpr<'tcx> {
+    fn get_lower_expr(&self) -> &SymbExpr<'tcx, T> {
         &self.range.lower_expr
     }
 
-    fn get_upper_expr(&self) -> &SymbExpr<'tcx> {
+    fn get_upper_expr(&self) -> &SymbExpr<'tcx, T> {
         &self.range.upper_expr
     }
 }
@@ -910,11 +833,11 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> IntervalTypeTrait<'tcx,
     fn set_range(&mut self, new_range: Range<'tcx, T>) {
         self.range = new_range;
     }
-    fn get_lower_expr(&self) -> &SymbExpr<'tcx> {
+    fn get_lower_expr(&self) -> &SymbExpr<'tcx, T> {
         &self.range.lower_expr
     }
 
-    fn get_upper_expr(&self) -> &SymbExpr<'tcx> {
+    fn get_upper_expr(&self) -> &SymbExpr<'tcx, T> {
         &self.range.upper_expr
     }
 }

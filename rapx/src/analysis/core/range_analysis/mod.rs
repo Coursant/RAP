@@ -192,7 +192,7 @@ impl fmt::Display for RangeType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 
 pub struct Range<'tcx, T>
 where
@@ -201,8 +201,8 @@ where
     pub rtype: RangeType,
     pub lower: T,
     pub upper: T,
-    pub lower_expr: SymbExpr<'tcx>,
-    pub upper_expr: SymbExpr<'tcx>,
+    pub lower_expr: SymbExpr<'tcx, T>,
+    pub upper_expr: SymbExpr<'tcx, T>,
 }
 static STR_MIN: Lazy<String> = Lazy::new(|| "Min".to_string());
 static STR_MAX: Lazy<String> = Lazy::new(|| "Max".to_string());

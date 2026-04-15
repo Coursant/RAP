@@ -610,7 +610,7 @@ where
 
                     let rhs_const_expr = operands[FieldIdx::from_usize(1)]
                         .constant()
-                        .map(|c| SymbExpr::Constant(c.const_));
+                        .and_then(|c| Self::convert_const(&c.const_).map(SymbExpr::Value));
 
                     let cmp_code = Self::operand_to_u64(&operands[FieldIdx::from_usize(2)])?;
                     let cmp_op = Self::decode_essa_cmp_op(cmp_code)?;
@@ -962,7 +962,7 @@ where
                         rap_trace!("cmp_op {:?}\n", cmp_op);
                         rap_trace!("const_in_left {:?}\n", const_in_left);
 
-                        let const_expr = SymbExpr::Constant(c.const_);
+                        let const_expr = SymbExpr::Value(value.clone());
                         let mut true_range = Self::apply_comparison(
                             value.clone(),
                             const_expr.clone(),
@@ -1099,12 +1099,12 @@ where
 
     fn apply_comparison<U: IntervalArithmetic>(
         constant: U,
-        const_expr: SymbExpr<'tcx>,
+        const_expr: SymbExpr<'tcx, U>,
         cmp_op: BinOp,
         is_true_branch: bool,
         const_in_left: bool,
     ) -> Range<'tcx, U> {
-        let one_expr = SymbExpr::Integer(1);
+        let one_expr = SymbExpr::Value(U::one());
         let const_minus_one_expr = SymbExpr::Binary(
             BinOp::Sub,
             Box::new(const_expr.clone()),
@@ -1117,7 +1117,7 @@ where
         );
         let max_minus_one_expr = SymbExpr::Binary(
             BinOp::Sub,
-            Box::new(SymbExpr::max_extremum()),
+            Box::new(SymbExpr::max_value_expr()),
             Box::new(one_expr),
         );
 
@@ -1127,7 +1127,7 @@ where
                     Range::new_symb(
                         U::min_value(),
                         constant.sub(U::one()),
-                        SymbExpr::min_extremum(),
+                        SymbExpr::min_value_expr(),
                         const_minus_one_expr,
                         RangeType::Unknown,
                     )
@@ -1136,7 +1136,7 @@ where
                         constant,
                         U::max_value(),
                         const_expr,
-                        SymbExpr::max_extremum(),
+                        SymbExpr::max_value_expr(),
                         RangeType::Unknown,
                     )
                 }
@@ -1147,7 +1147,7 @@ where
                     Range::new_symb(
                         U::min_value(),
                         constant,
-                        SymbExpr::min_extremum(),
+                        SymbExpr::min_value_expr(),
                         const_expr.clone(),
                         RangeType::Unknown,
                     )
@@ -1156,7 +1156,7 @@ where
                         constant.add(U::one()),
                         U::max_value(),
                         const_plus_one_expr.clone(),
-                        SymbExpr::max_extremum(),
+                        SymbExpr::max_value_expr(),
                         RangeType::Unknown,
                     )
                 }
@@ -1167,7 +1167,7 @@ where
                     Range::new_symb(
                         U::min_value(),
                         constant,
-                        SymbExpr::min_extremum(),
+                        SymbExpr::min_value_expr(),
                         const_expr.clone(),
                         RangeType::Unknown,
                     )
@@ -1176,7 +1176,7 @@ where
                         constant.add(U::one()),
                         U::max_value(),
                         const_plus_one_expr,
-                        SymbExpr::max_extremum(),
+                        SymbExpr::max_value_expr(),
                         RangeType::Unknown,
                     )
                 }
@@ -1187,7 +1187,7 @@ where
                     Range::new_symb(
                         U::min_value(),
                         constant,
-                        SymbExpr::min_extremum(),
+                        SymbExpr::min_value_expr(),
                         const_expr.clone(),
                         RangeType::Unknown,
                     )
@@ -1207,7 +1207,7 @@ where
                     Range::new_symb(
                         U::min_value(),
                         constant,
-                        SymbExpr::min_extremum(),
+                        SymbExpr::min_value_expr(),
                         const_expr,
                         RangeType::Unknown,
                     )
@@ -1216,7 +1216,7 @@ where
                         constant,
                         U::max_value(),
                         const_expr.clone(),
-                        SymbExpr::max_extremum(),
+                        SymbExpr::max_value_expr(),
                         RangeType::Unknown,
                     )
                 }
