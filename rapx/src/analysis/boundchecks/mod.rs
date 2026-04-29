@@ -210,11 +210,18 @@ fn build_callers<'tcx>(
                 .map(|(caller, terminator)| CallerInfo {
                     name: tcx.def_path_str(*caller),
                     caller_is_unsafe: check_safety(tcx, *caller) == Safety::Unsafe,
-                    call_site_in_unsafe_block: terminator
-                        .map(|term| {
-                            is_call_site_in_unsafe_block(tcx, *caller, term.source_info.span)
-                        })
-                        .unwrap_or(false),
+                    call_site_in_unsafe_block: if matches!(
+                        tcx.def_kind(*caller),
+                        DefKind::Fn | DefKind::AssocFn
+                    ) {
+                        terminator
+                            .map(|term| {
+                                is_call_site_in_unsafe_block(tcx, *caller, term.source_info.span)
+                            })
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    },
                 })
                 .collect()
         })

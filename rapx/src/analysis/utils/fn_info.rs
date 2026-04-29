@@ -217,7 +217,14 @@ pub fn get_struct_name(tcx: TyCtxt<'_>, def_id: DefId) -> Option<String> {
     None
 }
 
+pub fn def_kind_has_fn_sig(def_kind: DefKind) -> bool {
+    matches!(def_kind, DefKind::Fn | DefKind::AssocFn)
+}
+
 pub fn check_safety(tcx: TyCtxt<'_>, def_id: DefId) -> Safety {
+    if !def_kind_has_fn_sig(tcx.def_kind(def_id)) {
+        return Safety::Safe;
+    }
     let poly_fn_sig = tcx.fn_sig(def_id);
     let fn_sig = poly_fn_sig.skip_binder();
     fn_sig.safety()
@@ -1585,4 +1592,21 @@ pub fn get_ptr_deref_dummy_def_id(tcx: TyCtxt<'_>) -> Option<DefId> {
 
         (name.as_str() == "__raw_ptr_deref_dummy").then_some(def_id)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::def_kind_has_fn_sig;
+    use rustc_hir::def::DefKind;
+
+    #[test]
+    fn def_kind_has_fn_sig_only_for_plain_functions() {
+        assert!(def_kind_has_fn_sig(DefKind::Fn));
+        assert!(def_kind_has_fn_sig(DefKind::AssocFn));
+        assert!(!def_kind_has_fn_sig(DefKind::Closure));
+        assert!(!def_kind_has_fn_sig(DefKind::Const));
+        assert!(!def_kind_has_fn_sig(DefKind::AssocConst));
+        assert!(!def_kind_has_fn_sig(DefKind::AnonConst));
+        assert!(!def_kind_has_fn_sig(DefKind::InlineConst));
+    }
 }

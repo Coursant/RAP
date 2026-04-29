@@ -124,19 +124,41 @@ python3 collect_popular_crates_bc_dataset.py \
 ```
 
 What it does:
-1. Downloads top crates from crates.io (by downloads)
-2. Runs `cargo rapx -O` per crate with adaptive toolchain selection:
+1. Fetches top crates from crates.io (by downloads) with pagination and saves a reproducible snapshot file such as `popular_crates_top1000.json`
+2. Downloads each crate source tarball into `dataset_bc/sources/`
+3. Runs `cargo rapx -bounds-db` per crate with adaptive toolchain selection:
    - prefer crate-local `rust-toolchain.toml` / `rust-toolchain`
    - fallback to `Cargo.toml` `rust-version`
    - fallback to `--toolchain`, then default cargo toolchain
-3. Finds generated bounds-check JSON (`bounds_checks*.json`)
-4. Builds `bc_dataset.jsonl` where each record contains:
+   - workspace crates are analyzed with `RAP_RECURSIVE=shallow`
+4. Finds generated bounds-check JSON (`bounds_checks*.json`)
+5. Builds `bounds_checks_dataset.json` where each record contains:
    - one BC entry (`bc`)
+   - crate metadata (`crate`, `version`, `rank`)
    - the corresponding LLVM reserved marker (`llvm_reserved`)
    - match status (`llvm_reserved_matched`, unmatched rows keep `llvm_reserved = null`)
+   - LLVM retention result (`llvm_retained`)
 
 Output files:
+- `dataset_bc/popular_crates_top*.json`: frozen popular-crate snapshot used by the run
 - `dataset_bc/raw_json/*.json`: copied raw BC JSON per crate
-- `dataset_bc/bc_dataset.jsonl`: dataset rows (one BC per line)
-- `dataset_bc/manifest.json`: per-crate processing status and counts
-  - if crates.io is unreachable, manifest is still written with `status = "fetch_popular_crates_failed"` and the error message
+- `dataset_bc/crate_status/*.json`: per-crate processing status and counts
+- `dataset_bc/bounds_checks_dataset.json`: aggregated dataset with `metadata`, `crates`, and `records`
+- `dataset_bc/dataset_index.json`: top-level summary and links to per-crate status files
+  - if crates.io is unreachable, `dataset_index.json` is still written with `status = "fetch_popular_crates_failed"` and the error message
+
+Offline mode:
+
+```shell
+python3 collect_popular_crates_bc_dataset.py \
+  --offline \
+  --output-dir dataset_bc
+```
+
+- `--offline` keeps the same analysis pipeline, but switches crate source acquisition from crates.io downloads to existing sources under `<output-dir>/sources`.
+- `--offline` does not require `--crates-file`; it auto-discovers crates from `<output-dir>/sources`.
+- If needed, `--crates-file` can still be provided to restrict offline analysis to a subset of crates already present in `sources/`.
+- Supported layouts inside `<output-dir>/sources` include:
+  - `<output-dir>/sources/<crate>-<version>`
+  - `<output-dir>/sources/<crate>/<version>`
+  - `<output-dir>/sources/<crate>`
