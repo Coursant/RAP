@@ -76,6 +76,42 @@ class ExtractBcFunctionTestcasesTests(unittest.TestCase):
         self.assertEqual([r["bc_index"] for r in groups[0]["records"]], [0, 1])
         self.assertEqual(groups[1]["function_name"], "demo::other")
 
+    def test_bounds_check_details_extracts_source_and_llvm_fields(self) -> None:
+        details = script.bounds_check_details(
+            [make_record(bc_index=7, line=42, function_name="demo::checked")]
+        )
+
+        self.assertEqual(
+            details,
+            [
+                {
+                    "bc_index": 7,
+                    "source_file": "src/lib.rs",
+                    "source_line": 42,
+                    "function_name": "demo::checked",
+                    "llvm_retained": True,
+                    "llvm_reserved_matched": True,
+                    "llvm_reserved_file": "src/lib.rs",
+                    "llvm_reserved_line": 42,
+                    "llvm_reserved_function": "demo::checked",
+                    "llvm_reserved_retained": True,
+                    "raw_json_path": "/tmp/raw.json",
+                }
+            ],
+        )
+
+    def test_retained_summary_counts_retained_bounds_checks(self) -> None:
+        self.assertEqual(
+            script.retained_summary(
+                [
+                    {"llvm_retained": True},
+                    {"llvm_retained": False},
+                    {"llvm_retained": None},
+                ]
+            ),
+            "1/3 retained",
+        )
+
     def test_extract_function_at_line_includes_attrs_and_docs(self) -> None:
         source = "\n".join(
             [
@@ -181,7 +217,30 @@ class ExtractBcFunctionTestcasesTests(unittest.TestCase):
             self.assertIn("pub fn checked", (testcase_dir / "src" / "lib.rs").read_text())
             metadata = json.loads((testcase_dir / "bc_metadata.json").read_text())
             self.assertEqual(metadata["bc_indexes"], [0, 1])
+            self.assertEqual(
+                metadata["bc_details"][0],
+                {
+                    "bc_index": 0,
+                    "source_file": "src/lib.rs",
+                    "source_line": 4,
+                    "function_name": "demo::checked",
+                    "llvm_retained": True,
+                    "llvm_reserved_matched": True,
+                    "llvm_reserved_file": "src/lib.rs",
+                    "llvm_reserved_line": 4,
+                    "llvm_reserved_function": "demo::checked",
+                    "llvm_reserved_retained": True,
+                    "raw_json_path": "/tmp/raw.json",
+                },
+            )
             self.assertEqual(metadata["check_status"], script.STATUS_OK)
+            self.assertEqual(testcase["bc_details"][1]["bc_index"], 1)
+            report_text = report_path.read_text(encoding="utf-8")
+            self.assertIn("retained", report_text)
+            self.assertIn("2/2 retained", report_text)
+            self.assertIn("Bounds-Check Detail", report_text)
+            self.assertIn("bc_index=0 source=src/lib.rs:4", report_text)
+            self.assertIn("llvm_retained=True llvm_reserved_matched=True", report_text)
             run.assert_called_once()
             self.assertEqual(run.call_args.kwargs["cwd"], testcase_dir)
             self.assertEqual(run.call_args.kwargs["timeout"], 9)

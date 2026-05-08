@@ -66,6 +66,14 @@ def report_timestamp(generated_at: str) -> str:
     )
 
 
+def retained_summary(details: List[Dict[str, Any]]) -> str:
+    total = len(details)
+    if total == 0:
+        return "0/0 retained"
+    retained = sum(1 for detail in details if detail.get("llvm_retained") is True)
+    return f"{retained}/{total} retained"
+
+
 def build_run_report(index: Dict[str, Any]) -> str:
     testcases = index.get("testcases", [])
     status_counts: Dict[str, int] = {}
@@ -107,6 +115,8 @@ def build_run_report(index: Dict[str, Any]) -> str:
             + " "
             + "bc".ljust(6)
             + " "
+            + "retained".ljust(14)
+            + " "
             + "testcase_dir"
         )
         lines.append(header)
@@ -121,8 +131,29 @@ def build_run_report(index: Dict[str, Any]) -> str:
                 + " "
                 + str(len(item.get("bc_indexes", []))).ljust(6)[:6]
                 + " "
+                + retained_summary(item.get("bc_details", [])).ljust(14)[:14]
+                + " "
                 + str(item.get("testcase_dir", ""))
             )
+
+        lines.extend(["", "Bounds-Check Detail"])
+        for item in testcases:
+            lines.append(
+                f"- {item.get('crate')}@{item.get('version')} "
+                f"function={item.get('function_name')} "
+                f"status={item.get('check_status')}"
+            )
+            for detail in item.get("bc_details", []):
+                lines.append(
+                    "    "
+                    f"bc_index={detail.get('bc_index')} "
+                    f"source={detail.get('source_file')}:{detail.get('source_line')} "
+                    f"llvm_retained={detail.get('llvm_retained')} "
+                    f"llvm_reserved_matched={detail.get('llvm_reserved_matched')} "
+                    f"llvm_reserved={detail.get('llvm_reserved_file')}:"
+                    f"{detail.get('llvm_reserved_line')} "
+                    f"llvm_function={detail.get('llvm_reserved_function')}"
+                )
 
     failures = [item for item in testcases if item.get("check_status") != STATUS_OK]
     if failures:
@@ -163,6 +194,31 @@ def record_function_name(record: Dict[str, Any]) -> str:
     if not name and isinstance(record.get("llvm_reserved"), dict):
         name = record["llvm_reserved"].get("function")
     return str(name) if name else "<unknown>"
+
+
+def bounds_check_details(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    details = []
+    for record in records:
+        source_file, source_line = record_location(record)
+        llvm_reserved = (
+            record.get("llvm_reserved") if isinstance(record.get("llvm_reserved"), dict) else {}
+        )
+        details.append(
+            {
+                "bc_index": record.get("bc_index"),
+                "source_file": source_file,
+                "source_line": source_line,
+                "function_name": record_function_name(record),
+                "llvm_retained": record.get("llvm_retained"),
+                "llvm_reserved_matched": record.get("llvm_reserved_matched"),
+                "llvm_reserved_file": llvm_reserved.get("file"),
+                "llvm_reserved_line": llvm_reserved.get("line"),
+                "llvm_reserved_function": llvm_reserved.get("function"),
+                "llvm_reserved_retained": llvm_reserved.get("retained"),
+                "raw_json_path": record.get("raw_json_path"),
+            }
+        )
+    return details
 
 
 def group_records_by_function(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -512,16 +568,11 @@ def testcase_metadata(
     check_elapsed_sec: float,
 ) -> Dict[str, Any]:
     records = group["records"]
-    source_lines = []
-    bc_indexes = []
-    retained_values = []
-    matched_values = []
-    for record in records:
-        _, line = record_location(record)
-        source_lines.append(line)
-        bc_indexes.append(record.get("bc_index"))
-        retained_values.append(record.get("llvm_retained"))
-        matched_values.append(record.get("llvm_reserved_matched"))
+    bc_details = bounds_check_details(records)
+    source_lines = [detail.get("source_line") for detail in bc_details]
+    bc_indexes = [detail.get("bc_index") for detail in bc_details]
+    retained_values = [detail.get("llvm_retained") for detail in bc_details]
+    matched_values = [detail.get("llvm_reserved_matched") for detail in bc_details]
 
     return {
         "crate": group["crate"],
@@ -536,6 +587,7 @@ def testcase_metadata(
         "bc_indexes": bc_indexes,
         "llvm_retained_values": retained_values,
         "llvm_reserved_matched_values": matched_values,
+        "bc_details": bc_details,
         "record_count": len(records),
         "records": records,
         "check_status": check_status,
@@ -565,6 +617,7 @@ def process_group(
         "function_name": function_name,
         "source_file": source_file,
         "bc_indexes": [record.get("bc_index") for record in group["records"]],
+        "bc_details": bounds_check_details(group["records"]),
         "testcase_dir": str(testcase_dir),
         "check_status": "",
         "check_output_tail": "",

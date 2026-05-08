@@ -196,6 +196,51 @@
 - `cargo_check_failed`
 - `timeout`
 
+#### `extract_bc_function_testcases.py` 工作流程
+
+当前函数级 testcase 提取器的实际执行路径如下：
+
+1. 读取 `bounds_checks_dataset.json`，取出 `records`；如果传入 `--only-retained`，只保留 `llvm_retained == true` 的 bounds check 记录。
+2. 按 `(crate, version, rank, source_file, function_name)` 分组。同一个函数里的多个 bounds check 会合并为一个 testcase。
+3. 对每个分组解析 crate 源码目录：
+   - 通过 `crate` / `version` 在 `sources/` 下定位已 staged 的源码目录。
+   - 读取 record 中的 `source_file`。
+   - 检查源码文件是否存在，且不能逃逸出 crate 目录。
+4. 从该组所有 bounds check 行号中选择最小行号作为 `target_line`。
+5. 读取源码文件并调用 `extract_function_at_line()`：
+   - 先 mask 掉注释、普通字符串、raw string 和 char literal，避免其中的 `{}` 干扰 brace matching。
+   - 用正则寻找 `fn name`。
+   - 找到 `fn` 后第一个 `{`，再做 brace matching 找函数结束位置。
+   - 判断目标行是否落在该函数范围内。
+   - 把紧邻函数之前的 doc comments 和 attributes 一起纳入提取结果。
+   - 如果候选函数不在顶层，即 brace depth 不为 0，则标记为 `unsupported_nested_context`。
+6. 生成独立 Cargo testcase crate：
+   - `Cargo.toml` 重新生成 `[package]`。
+   - 从原 crate 的 `Cargo.toml` 复制 `[dependencies]`、`[dev-dependencies]`、`[build-dependencies]`。
+   - `src/lib.rs` 写入 allow 属性和提取出的函数源码。
+7. 对生成的 testcase crate 执行 `cargo check`：
+   - 返回码为 0 时标记 `check_status = ok`。
+   - 非 0 时标记 `cargo_check_failed`，并记录输出尾部。
+   - 超时则标记 `timeout`。
+8. 写出结果：
+   - 成功或失败条目都写入 `function_testcases_index.json`。
+   - 成功生成 testcase 目录时额外写入 `bc_metadata.json`。
+   - 生成 `run_reports/extract_report_<timestamp>.log`，包含逐 testcase 摘要、bounds check 明细和失败详情。
+
+#### 为什么大量函数提取失败
+
+当前失败率高的主要原因不是 bounds check 数据本身错误，而是“单函数切片独立编译”的约束很强。真实 crate 中的函数通常依赖较多上下文，当前脚本只做轻量文本级提取，没有构建完整 Rust item 依赖闭包。
+
+常见失败来源包括：
+
+- `unsupported_nested_context`：当前只支持顶层自由函数。大量 bounds check 位于 `impl` 方法、trait 默认方法或 `mod` 内部函数中，这些函数的 brace depth 不为 0，会被明确拒绝。
+- `source_not_found`：record 里的源码路径在当前 `sources/` 中不存在，可能是 staged 源码缺失、crate 版本不匹配、路径记录来自生成文件，或者路径相对关系和当前源码目录不一致。
+- `function_not_found`：record 行号没有落入任何可识别的 `fn` 范围，常见于宏展开、源码版本漂移、行号记录偏移、条件编译分支不同，或者函数不是普通 `fn name { ... }` 形态。
+- `cargo_check_failed`：函数虽然被切出来，但独立 crate 无法编译。典型原因是缺少原 crate 内部类型、trait、helper function、macro、const、module 路径、`use`、feature gate、cfg 配置或 workspace dependency。
+- `timeout`：生成的 testcase 执行 `cargo check` 超过 `--timeout-sec`，通常和依赖解析、复杂 workspace 配置或编译开销有关。
+
+因此，当前 extractor 更适合筛出“顶层、依赖少、可独立编译”的函数级 testcase；对真实生态里的方法、模块内函数、宏生成函数和强上下文依赖函数，失败是预期行为。后续若要显著提升成功率，需要从“提取单个函数源码片段”升级为“提取函数所在 Rust 上下文和必要依赖闭包”。
+
 ---
 
 ## 3. 当前脚本最终行为

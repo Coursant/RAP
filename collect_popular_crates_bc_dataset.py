@@ -172,7 +172,11 @@ def build_run_report(
                 "status_file": item.get("crate_status_path", ""),
             }
             line = " ".join(
-                _truncate_for_table(row_values[name], width).ljust(width)
+                (
+                    str(row_values[name])
+                    if name == "status_file"
+                    else _truncate_for_table(row_values[name], width).ljust(width)
+                )
                 for name, width in crate_table_columns
             )
             lines.append(line)

@@ -100,6 +100,58 @@ class CollectPopularCratesDatasetTests(unittest.TestCase):
             self.assertIn("Error", run_report)
             self.assertIn("matched_ratio: 0/0", run_report)
 
+    def test_run_report_keeps_full_status_file_path_in_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = Path(tmp_dir) / "dataset_bc"
+            long_status_path = (
+                output_dir
+                / "crate_status"
+                / "very-long-crate-name-that-exceeds-the-old-column-width-1.2.3.json"
+            )
+            args = mock.Mock(
+                offline=True,
+                top_n=1,
+                crates_file=None,
+                output_dir=output_dir,
+                toolchain="stable",
+                timeout_sec=120,
+            )
+
+            report = script.build_run_report(
+                run_started_at="2026-01-01T00:00:00+00:00",
+                run_finished_at="2026-01-01T00:00:01+00:00",
+                args=args,
+                source_mode="offline_existing_sources",
+                dataset_path=output_dir / "bounds_checks_dataset.json",
+                dataset_index_path=output_dir / "dataset_index.json",
+                snapshot_path=output_dir / "popular_crates_snapshot.json",
+                crates=[{"id": "demo"}],
+                crate_summaries=[
+                    {
+                        "crate": "demo",
+                        "version": "1.2.3",
+                        "rank": 1,
+                        "status": "ok",
+                        "used_toolchain": "stable",
+                        "elapsed_text": "00:00:01",
+                        "bc_count": 1,
+                        "matched_rows": "1/1",
+                        "retained_rows": "1/1",
+                        "source_origin": "existing_sources",
+                        "crate_status_path": str(long_status_path),
+                    }
+                ],
+                total_bc_count=1,
+                matched_bc_count=1,
+                retained_bc_count=1,
+                success_count=1,
+                failed_count=0,
+                overall_status="ok",
+            )
+
+            self.assertIn(str(long_status_path), report)
+            self.assertNotIn(str(long_status_path)[:45] + "...", report)
+
     def test_run_rapx_fallbacks_include_stable_and_workspace_env(self) -> None:
         calls = []
 
