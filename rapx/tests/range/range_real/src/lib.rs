@@ -97,7 +97,7 @@ pub mod zlib_rs {
                 // - Sites: `input[pos + len]` and `input[pos]`.
                 // - Semantically removable: yes.
                 // - Pattern: locally guarded or fixed-size in-bounds access.
-                // - Reason: `max > 0` implies `pos < input.len()`, and
+                // - Reason:`max = input.len()-pos` `max > 0` implies `pos < input.len()`, and
                 //   `len < max` keeps `pos + len` in bounds.
                 pub fn fizzle_matches(input: &[u8], pos: usize, limit: usize) -> usize {
                     let mut len = 0;
@@ -2194,15 +2194,15 @@ pub mod pyo3 {
             // - Reason: `read_idx < bytes.len()` guards the read and
             //   `read_idx >= write_idx` implies `write_idx < bytes.len()`; the
             //   invariant is preserved because both indexes advance together.
-            pub const fn copy_forward_until_eol(
+            pub  fn copy_forward_until_eol(
                 bytes: &mut [u8],
                 mut read_idx: usize,
                 mut write_idx: usize,
             ) -> (usize, usize) {
                 assert!(read_idx >= write_idx);
                 while read_idx < bytes.len() {
-                    let value = bytes[read_idx];
-                    bytes[write_idx] = value;
+                    let value = bytes[read_idx]; // bounds check eliminated 
+                    bytes[write_idx] = value;// bounds check retained
                     read_idx += 1;
                     write_idx += 1;
                     if value == b'\n' {
