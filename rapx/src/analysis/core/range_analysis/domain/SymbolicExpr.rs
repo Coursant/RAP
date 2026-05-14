@@ -5,6 +5,7 @@
 #![allow(unused_parens)]
 #![allow(non_snake_case)]
 use rust_intervals::NothingBetween;
+use rustc_infer::infer::region_constraints;
 
 use crate::analysis::core::range_analysis::domain::ConstraintGraph::ConstraintGraph;
 use crate::analysis::core::range_analysis::domain::domain::{
@@ -308,14 +309,26 @@ where
                 Self::first_aggregate_operand_expr(operands, &place_ctx)
             }
 
-            Rvalue::Ref(..)
-            | Rvalue::ThreadLocalRef(..)
+            Rvalue::Ref(region_constraints, borrow, place) => {
+                let expr = Self::from_place_with_ctx(place, &place_ctx);
+                if matches!(expr, SymbExpr::Unknown) {
+                    return SymbExpr::Unknown;
+                }
+                expr
+            }
+            Rvalue::RawPtr(raw_ptr_kind, place) => {
+                let expr = Self::from_place_with_ctx(place, &place_ctx);
+                if matches!(expr, SymbExpr::Unknown) {
+                    return SymbExpr::Unknown;
+                }
+                expr
+            }
+            Rvalue::ThreadLocalRef(..)
             | Rvalue::Repeat(..)
             | Rvalue::ShallowInitBox(..)
             | Rvalue::NullaryOp(..)
             | Rvalue::Discriminant(..)
             | Rvalue::CopyForDeref(..) => SymbExpr::Unknown,
-            Rvalue::RawPtr(raw_ptr_kind, place) => todo!(),
             Rvalue::WrapUnsafeBinder(operand, ty) => todo!(),
         }
     }

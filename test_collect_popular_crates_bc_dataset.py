@@ -152,6 +152,28 @@ class CollectPopularCratesDatasetTests(unittest.TestCase):
             self.assertIn(str(long_status_path), report)
             self.assertNotIn(str(long_status_path)[:45] + "...", report)
 
+    def test_cleanup_largest_target_dir_removes_only_largest_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            crate_dir = Path(tmp_dir) / "crate"
+            small_target = crate_dir / "member-a" / "target"
+            large_target = crate_dir / "member-b" / "target"
+            small_target.mkdir(parents=True)
+            large_target.mkdir(parents=True)
+            (small_target / "small.bin").write_bytes(b"x" * 5)
+            (large_target / "large.bin").write_bytes(b"x" * 25)
+
+            cleanup = script.cleanup_largest_target_dir(crate_dir)
+
+            self.assertEqual(
+                cleanup,
+                {
+                    "removed_target_dir": str(large_target),
+                    "removed_target_size_bytes": 25,
+                },
+            )
+            self.assertTrue(small_target.exists())
+            self.assertFalse(large_target.exists())
+
     def test_run_rapx_fallbacks_include_stable_and_workspace_env(self) -> None:
         calls = []
 
@@ -289,6 +311,8 @@ class CollectPopularCratesDatasetTests(unittest.TestCase):
                 (saved / "Cargo.toml").write_text(
                     "[package]\nname='x'\nversion='0.1.0'\n", encoding="utf-8"
                 )
+                (saved / "target" / "debug").mkdir(parents=True)
+                (saved / "target" / "debug" / "artifact.bin").write_bytes(b"x" * 64)
                 if crate == "syn":
                     payload = {
                         "bounds_checks": [
@@ -360,6 +384,8 @@ class CollectPopularCratesDatasetTests(unittest.TestCase):
             self.assertTrue(syn_status_path.exists())
             self.assertTrue(quote_status_path.exists())
             self.assertTrue(syn_raw_json.exists())
+            self.assertFalse((output_dir / "sources" / "syn-2.0.117" / "target").exists())
+            self.assertFalse((output_dir / "sources" / "quote-1.0.39" / "target").exists())
 
             dataset = json.loads(dataset_path.read_text(encoding="utf-8"))
             dataset_index = json.loads(dataset_index_path.read_text(encoding="utf-8"))
@@ -405,10 +431,19 @@ class CollectPopularCratesDatasetTests(unittest.TestCase):
             self.assertIn("error line 2", run_report)
 
             self.assertEqual(syn_status["status"], "ok")
+            self.assertEqual(
+                syn_status["removed_target_dir"],
+                str(output_dir / "sources" / "syn-2.0.117" / "target"),
+            )
+            self.assertEqual(syn_status["removed_target_size_bytes"], 64)
             self.assertEqual(syn_status["bc_count"], 1)
             self.assertEqual(syn_status["matched_rows"], 1)
             self.assertEqual(syn_status["retained_rows"], 1)
             self.assertEqual(quote_status["status"], "rapx_failed")
+            self.assertEqual(
+                quote_status["removed_target_dir"],
+                str(output_dir / "sources" / "quote-1.0.39" / "target"),
+            )
             self.assertEqual(quote_status["last_attempt_command"], "cargo +stable rapx -bounds-db")
             self.assertEqual(quote_status["log_tail"], "error line 1\nerror line 2")
             self.assertNotIn("bc_count", quote_status)

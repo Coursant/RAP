@@ -588,11 +588,126 @@ where
         }
     }
 
-    fn extract_essa_syminterval_from_rvalue(
+    fn empty_essa_range() -> Range<'tcx, T> {
+        Range::new_symb(
+            T::max_value(),
+            T::min_value(),
+            SymbExpr::Unknown,
+            SymbExpr::Unknown,
+            RangeType::Empty,
+        )
+    }
+
+    fn top_essa_range(
+        lower_expr: SymbExpr<'tcx, T>,
+        upper_expr: SymbExpr<'tcx, T>,
+    ) -> Range<'tcx, T> {
+        Range::new_symb(
+            T::min_value(),
+            T::max_value(),
+            lower_expr,
+            upper_expr,
+            RangeType::Unknown,
+        )
+    }
+
+    fn add_one_expr(expr: SymbExpr<'tcx, T>) -> SymbExpr<'tcx, T> {
+        SymbExpr::Binary(
+            BinOp::Add,
+            Box::new(expr),
+            Box::new(SymbExpr::Value(T::one())),
+        )
+    }
+
+    fn sub_one_expr(expr: SymbExpr<'tcx, T>) -> SymbExpr<'tcx, T> {
+        SymbExpr::Binary(
+            BinOp::Sub,
+            Box::new(expr),
+            Box::new(SymbExpr::Value(T::one())),
+        )
+    }
+
+    fn essa_const_range(source: &'tcx Place<'tcx>, constant: T, cmp_op: BinOp) -> Range<'tcx, T> {
+        let source_expr = SymbExpr::Place(source);
+        let const_expr = SymbExpr::Value(constant);
+
+        match cmp_op {
+            BinOp::Lt => {
+                if let Some(upper) = constant.checked_sub(&T::one()) {
+                    Range::new_symb(
+                        T::min_value(),
+                        upper,
+                        source_expr,
+                        Self::sub_one_expr(const_expr),
+                        RangeType::Regular,
+                    )
+                } else {
+                    Self::empty_essa_range()
+                }
+            }
+            BinOp::Le => Range::new_symb(
+                T::min_value(),
+                constant,
+                source_expr,
+                const_expr,
+                RangeType::Regular,
+            ),
+            BinOp::Gt => {
+                if let Some(lower) = constant.checked_add(&T::one()) {
+                    Range::new_symb(
+                        lower,
+                        T::max_value(),
+                        Self::add_one_expr(const_expr),
+                        source_expr,
+                        RangeType::Regular,
+                    )
+                } else {
+                    Self::empty_essa_range()
+                }
+            }
+            BinOp::Ge => Range::new_symb(
+                constant,
+                T::max_value(),
+                const_expr,
+                source_expr,
+                RangeType::Regular,
+            ),
+            BinOp::Eq => Range::new_symb(
+                constant,
+                constant,
+                const_expr.clone(),
+                const_expr,
+                RangeType::Regular,
+            ),
+            BinOp::Ne => Self::top_essa_range(source_expr.clone(), source_expr),
+            _ => Self::top_essa_range(source_expr.clone(), source_expr),
+        }
+    }
+
+    fn essa_symbolic_range(
+        source: &'tcx Place<'tcx>,
+        rhs: &'tcx Place<'tcx>,
+        cmp_op: BinOp,
+    ) -> Range<'tcx, T> {
+        let source_expr = SymbExpr::Place(source);
+        let rhs_expr = SymbExpr::Place(rhs);
+
+        match cmp_op {
+            BinOp::Lt => Self::top_essa_range(source_expr, Self::sub_one_expr(rhs_expr)),
+            BinOp::Le => Self::top_essa_range(source_expr, rhs_expr),
+            BinOp::Gt => Self::top_essa_range(Self::add_one_expr(rhs_expr), source_expr),
+            BinOp::Ge => Self::top_essa_range(rhs_expr, source_expr),
+            BinOp::Eq => Self::top_essa_range(rhs_expr.clone(), rhs_expr),
+            BinOp::Ne => Self::top_essa_range(source_expr.clone(), source_expr),
+            _ => Self::top_essa_range(source_expr.clone(), source_expr),
+        }
+    }
+
+    fn extract_essa_symbexpr_from_rvalue(
         &self,
         rvalue: &'tcx Rvalue<'tcx>,
     ) -> Option<IntervalType<'tcx, T>> {
-        let (source, rhs_const, rhs_const_expr, cmp_op) = match rvalue {
+        let (source, rhs, cmp_op) = match rvalue {
             Rvalue::Aggregate(kind, operands) => match **kind {
                 AggregateKind::Adt(def_id, _, _, _, _) if def_id == self.essa => {
                     if operands.len() < 3 {
@@ -604,56 +719,29 @@ where
                         _ => return None,
                     };
 
-                    let rhs_const = operands[FieldIdx::from_usize(1)]
-                        .constant()
-                        .and_then(|c| Self::convert_const(&c.const_));
-
-                    let rhs_const_expr = operands[FieldIdx::from_usize(1)]
-                        .constant()
-                        .and_then(|c| Self::convert_const(&c.const_).map(SymbExpr::Value));
-
+                    let rhs = &operands[FieldIdx::from_usize(1)];
                     let cmp_code = Self::operand_to_u64(&operands[FieldIdx::from_usize(2)])?;
                     let cmp_op = Self::decode_essa_cmp_op(cmp_code)?;
-                    (source, rhs_const, rhs_const_expr, cmp_op)
+                    (source, rhs, cmp_op)
                 }
                 _ => return None,
             },
             _ => return None,
         };
 
-        // eSSA in "variable + constant" form stores [place, const, cmp_code, ...].
-        // Build branch interval directly from cmp_code and the constant.
-        if let Some(c) = rhs_const {
-            let mut range = Self::apply_comparison(
-                c,
-                rhs_const_expr.unwrap_or(SymbExpr::Unknown),
-                cmp_op,
-                true,
-                false,
-            );
-            range.set_regular();
-            return Some(IntervalType::Basic(BasicInterval::new(range)));
-        }
-
-        let vbm = self.values_branchmap.get(source)?;
-        let t = vbm.get_itv_t();
-        let f = vbm.get_itv_f();
-
-        for interval in [t.clone(), f.clone()] {
-            if let IntervalType::Symb(sym) = &interval {
-                if sym.get_operation() == cmp_op {
-                    return Some(interval);
-                }
+        match rhs {
+            Operand::Constant(c) => {
+                let value = Self::convert_const(&c.const_)?;
+                let range = Self::essa_const_range(source, value, cmp_op);
+                Some(IntervalType::Basic(BasicInterval::new(range)))
+            }
+            Operand::Copy(rhs_place) | Operand::Move(rhs_place) => {
+                let range = Self::essa_symbolic_range(source, rhs_place, cmp_op);
+                Some(IntervalType::Symb(SymbInterval::new(
+                    range, rhs_place, cmp_op,
+                )))
             }
         }
-
-        for interval in [t, f] {
-            if matches!(interval, IntervalType::Symb(_)) {
-                return Some(interval);
-            }
-        }
-
-        None
     }
 
     pub fn def_add_varnode_sym(
@@ -670,7 +758,7 @@ where
                     VarNode::new_symb(v, SymbExpr::from_rvalue_ssa(rvalue, place_ctx.clone()))
                 }
                 AggregateKind::Adt(def_id, _, _, _, _) if def_id == self.essa => {
-                    match self.extract_essa_syminterval_from_rvalue(rvalue) {
+                    match self.extract_essa_symbexpr_from_rvalue(rvalue) {
                         Some(IntervalType::Symb(sym)) => {
                             let essa_node = VarNode::new_syminterval(v, sym);
                             rap_debug!("essa_node before setting interval: {:?}", essa_node);
@@ -1396,6 +1484,9 @@ where
                 Rvalue::Ref(_, borrowkind, place) => {
                     self.add_ref_op(sink, inst, rvalue, place, *borrowkind);
                 }
+                Rvalue::RawPtr(raw_ptr_kind, place) => {
+                    self.add_ref_op(sink, inst, rvalue, place, BorrowKind::Shared);
+                }
                 _ => {}
             },
             _ => {}
@@ -1425,7 +1516,6 @@ where
         block: BasicBlock,
     ) {
         rap_trace!("add_call_op for sink: {:?} {:?}\n", sink, terminator);
-        let sink_node = self.add_varnode(&sink);
 
         // Convert Operand arguments to Place arguments.
         // An Operand can be a Constant or a moved/copied Place.
@@ -1472,16 +1562,16 @@ where
         let arg_count = args.len();
         let mut arg_operands: Vec<Operand<'tcx>> = Vec::new();
         let mut places = Vec::new();
+        let bop_index = self.oprs.len();
         for op in args.iter() {
             match &op.node {
                 Operand::Copy(place) | Operand::Move(place) => {
                     arg_operands.push(op.node.clone());
                     places.push(place);
-                    self.add_varnode(place);
-                    self.usemap
+                    self.vars
                         .entry(place)
-                        .or_default()
-                        .insert(self.oprs.len());
+                        .or_insert_with(|| VarNode::new_symb(place, SymbExpr::Place(place)));
+                    self.usemap.entry(place).or_default().insert(bop_index);
                 }
 
                 Operand::Constant(_) => {
@@ -1493,10 +1583,46 @@ where
             }
         }
         {
-            let bi = BasicInterval::new(Range::default(T::min_value()));
+            let interval = if arg_count == 1 {
+                match &args[0].node {
+                    Operand::Copy(place) | Operand::Move(place) => {
+                        let expr = SymbExpr::Place(place);
+                        let node = VarNode::new_symb(sink, expr.clone());
+                        self.vars
+                            .entry(sink)
+                            .and_modify(|old| *old = node.clone())
+                            .or_insert(node);
+                        IntervalType::Basic(BasicInterval::new_symb(expr.clone(), expr))
+                    }
+                    Operand::Constant(c) => {
+                        let node = VarNode::new(sink);
+                        self.vars
+                            .entry(sink)
+                            .and_modify(|old| *old = node.clone())
+                            .or_insert(node);
+                        if let Some(value) = Self::convert_const(&c.const_) {
+                            IntervalType::Basic(BasicInterval::new(Range::new(
+                                value,
+                                value,
+                                RangeType::Regular,
+                            )))
+                        } else {
+                            IntervalType::Basic(BasicInterval::new(Range::default(T::min_value())))
+                        }
+                    }
+                }
+            } else {
+                let node = VarNode::new(sink);
+                self.vars
+                    .entry(sink)
+                    .and_modify(|old| *old = node.clone())
+                    .or_insert(node);
+                IntervalType::Basic(BasicInterval::new(Range::default(T::min_value())))
+            };
+            self.usemap.entry(sink).or_insert(HashSet::new());
 
             let call_op = CallOp::new(
-                IntervalType::Basic(bi),
+                interval,
                 &sink,
                 terminator, // Pass the allocated dummy statement
                 arg_operands,
@@ -1505,7 +1631,6 @@ where
                 places,
             );
             rap_debug!("call_op: {:?}\n", call_op);
-            let bop_index = self.oprs.len();
 
             // Insert the operation into the graph.
             self.oprs.push(BasicOpKind::Call(call_op));
@@ -1688,80 +1813,29 @@ where
         };
         let op = &operands[FieldIdx::from_usize(loc_2)];
         let bop_index = self.oprs.len();
-        let BI: IntervalType<'_, T>;
-        rap_trace!("essa_op operand1 {:?}\n", source1.unwrap());
-        if let Operand::Constant(c) = op {
-            let vbm = self.values_branchmap.get(source1.unwrap()).unwrap();
-            if block == *vbm.get_bb_true() {
-                rap_trace!("essa_op true branch{:?}\n", block);
-                BI = vbm.get_itv_t();
-            } else {
-                rap_trace!("essa_op false branch{:?}\n", block);
-                BI = vbm.get_itv_f();
-            }
-            self.usemap
-                .entry(source1.unwrap())
-                .or_default()
-                .insert(bop_index);
-
-            let essaop = EssaOp::new(BI, sink, inst, source1.unwrap(), 0, false);
-            rap_trace!(
-                "addvar_in_essa_op {:?} from const {:?}\n",
-                essaop,
-                source1.unwrap()
-            );
-
-            // Insert the operation in the graph.
-
-            self.oprs.push(BasicOpKind::Essa(essaop));
-            // Insert this definition in defmap
-            // self.usemap
-            //     .entry(source1.unwrap())
-            //     .or_default()
-            //     .insert(bop_index);
-
-            self.defmap.insert(sink, bop_index);
+        let Some(source1) = source1 else {
+            return;
+        };
+        let unresolved = if let Operand::Copy(place) | Operand::Move(place) = op {
+            self.use_add_varnode_sym(place, rvalue);
+            true
         } else {
-            let vbm = self.values_branchmap.get(source1.unwrap()).unwrap();
-            if block == *vbm.get_bb_true() {
-                rap_trace!("essa_op true branch{:?}\n", block);
-                BI = vbm.get_itv_t();
-            } else {
-                rap_trace!("essa_op false branch{:?}\n", block);
-                BI = vbm.get_itv_f();
-            }
-            let source2 = match op {
-                Operand::Copy(place) | Operand::Move(place) => {
-                    self.use_add_varnode_sym(place, rvalue);
-                    Some(place)
-                }
-                _ => None,
-            };
-            self.usemap
-                .entry(source1.unwrap())
-                .or_default()
-                .insert(bop_index);
-            // self.usemap
-            // .entry(source2.unwrap())
-            // .or_default()
-            // .insert(bop_index);
-            let essaop = EssaOp::new(BI, sink, inst, source1.unwrap(), 0, true);
-            // Insert the operation in the graph.
-            rap_trace!(
-                "addvar_in_essa_op {:?} from {:?}\n",
-                essaop,
-                source1.unwrap()
-            );
+            false
+        };
+        let BI = self
+            .extract_essa_symbexpr_from_rvalue(rvalue)
+            .unwrap_or_else(|| {
+                IntervalType::Basic(BasicInterval::new(Range::default(T::min_value())))
+            });
 
-            self.oprs.push(BasicOpKind::Essa(essaop));
-            // Insert this definition in defmap
-            // self.usemap
-            //     .entry(source1.unwrap())
-            //     .or_default()
-            //     .insert(bop_index);
+        rap_trace!("essa_op operand1 {:?}\n", source1);
+        self.usemap.entry(source1).or_default().insert(bop_index);
 
-            self.defmap.insert(sink, bop_index);
-        }
+        let essaop = EssaOp::new(BI, sink, inst, source1, 0, unresolved);
+        rap_trace!("addvar_in_essa_op {:?} from {:?}\n", essaop, source1);
+
+        self.oprs.push(BasicOpKind::Essa(essaop));
+        self.defmap.insert(sink, bop_index);
     }
     pub fn add_aggregate_op(
         &mut self,
@@ -1961,7 +2035,7 @@ where
         place: &'tcx Place<'tcx>,
         borrowkind: BorrowKind,
     ) {
-        rap_trace!("ref_op {:?}\n", inst);
+        rap_debug!("ref_op {:?}\n", inst);
 
         let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
 
@@ -1977,7 +2051,7 @@ where
 
         self.defmap.insert(sink, bop_index);
 
-        rap_trace!(
+        rap_debug!(
             "add_ref_op: created RefOp from {:?} to {:?} at {:?}\n",
             place,
             sink,

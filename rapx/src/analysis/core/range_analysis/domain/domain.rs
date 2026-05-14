@@ -424,8 +424,15 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                 match self.args.last() {
                     Some(Operand::Copy(place)) | Some(Operand::Move(place)) => {
                         let range = caller_vars[place].get_range().clone();
-                        let len = range.get_upper().clone() - range.get_lower().clone();
-                        result = Range::new(len.clone(), len.clone(), RangeType::Regular);
+                        let lower = range.get_lower();
+                        let upper = range.get_upper();
+                        result = if lower == T::min_value() || upper == T::max_value() {
+                            Range::new(T::min_value(), T::max_value(), RangeType::Regular)
+                        } else if let Some(len) = CheckedSub::checked_sub(&upper, &lower) {
+                            Range::new(len, len, RangeType::Regular)
+                        } else {
+                            Range::new(T::min_value(), T::max_value(), RangeType::Regular)
+                        };
                     }
                     Some(Operand::Constant(c)) => {}
                     None => {}

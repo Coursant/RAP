@@ -626,6 +626,44 @@ def find_latest_bc_json(crate_dir: Path) -> Optional[Path]:
     return candidates[-1] if candidates else None
 
 
+def directory_size(path: Path) -> int:
+    total = 0
+    for item in path.rglob("*"):
+        try:
+            if item.is_file() or item.is_symlink():
+                total += item.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def cleanup_largest_target_dir(crate_dir: Optional[Path]) -> Optional[Dict[str, Any]]:
+    if crate_dir is None or not crate_dir.exists():
+        return None
+
+    target_dirs = [path for path in crate_dir.rglob("target") if path.is_dir()]
+    if not target_dirs:
+        return None
+
+    largest = max(target_dirs, key=directory_size)
+    size_bytes = directory_size(largest)
+    shutil.rmtree(largest)
+    return {
+        "removed_target_dir": str(largest),
+        "removed_target_size_bytes": size_bytes,
+    }
+
+
+def record_target_cleanup(status: Dict[str, Any], crate_dir: Optional[Path]) -> None:
+    try:
+        cleanup = cleanup_largest_target_dir(crate_dir)
+    except Exception as exc:
+        status["target_cleanup_error"] = str(exc)
+        return
+    if cleanup is not None:
+        status.update(cleanup)
+
+
 def _extract_list(payload: Any, keys: List[str]) -> List[Any]:
     cur = payload
     for key in keys:
@@ -944,6 +982,7 @@ def main() -> None:
             "run_started_at": utc_now_iso(),
         }
         status_path = crate_status_dir / f"{crate}-{version}.json"
+        crate_dir: Optional[Path] = None
 
         try:
             if args.offline:
@@ -981,6 +1020,7 @@ def main() -> None:
                 else:
                     status["status"] = "bc_json_not_found" if ok else "rapx_failed"
                 status["run_finished_at"] = utc_now_iso()
+                record_target_cleanup(status, crate_dir)
                 write_json(status_path, status)
                 crate_summaries.append(
                     {
@@ -1030,6 +1070,7 @@ def main() -> None:
             status["error"] = str(exc)
             status["run_finished_at"] = utc_now_iso()
 
+        record_target_cleanup(status, crate_dir)
         write_json(status_path, status)
         crate_summaries.append(
             {

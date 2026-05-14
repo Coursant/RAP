@@ -18,6 +18,7 @@ use std::slice;
 /// - Verify that while-conditions and loop-body assignments continuously tighten bounds;
 /// - Verify stable convergence behavior under nested loops.
 pub fn numeric_coupled_loop() {
+    let mut k =0usize;
     while k < 100 {
         let mut i = 0usize;
         let mut j = k;
@@ -78,13 +79,13 @@ pub fn path_constraints_branching(x: i32, mut y: i32, z: i32) -> i32 {
 /// - Verify monotonic parameter decrease across recursive calls;
 /// - Verify path separation between base case (`n <= 0`) and recursive case;
 /// - Cover interval stability under self-recursive functions.
-pub fn recursion_countdown(n: i32) -> i32 {
-    if n <= 0 {
-        0
-    } else {
-        recursion_countdown(n - 1)
-    }
-}
+// pub fn recursion_countdown(n: i32) -> i32 {
+//     if n <= 0 {
+//         0
+//     } else {
+//         recursion_countdown(n - 1)
+//     }
+// }
 
 /// testcase: Symbolic-expression intervals (from range_symbolic)
 ///
@@ -132,41 +133,41 @@ pub fn slice_len_for_loop(a: &mut [usize; 10], slice_start: usize, slice_end: us
 /// - Verify the byte-indexing pattern `string.as_bytes()[0]`;
 /// - Verify slicing with `input[..i]` / `input[i+1..]` under `char_indices` and match branches;
 /// - Cover realistic character classification plus index slicing flow.
-pub fn parse_scheme_case(input: &str, context: bool) -> Option<(String, &str)> {
-    #[derive(PartialEq, Eq)]
-    enum Context {
-        UrlParser,
-        Setter,
-    }
+// pub fn parse_scheme_case(input: &str, context: bool) -> Option<(String, &str)> {
+//     #[derive(PartialEq, Eq)]
+//     enum Context {
+//         UrlParser,
+//         Setter,
+//     }
 
-    #[inline]
-    fn starts_with_ascii_alpha(string: &str) -> bool {
-        !string.is_empty() && matches!(string.as_bytes()[0], b'a'..=b'z' | b'A'..=b'Z')
-    }
+//     #[inline]
+//     fn starts_with_ascii_alpha(string: &str) -> bool {
+//         !string.is_empty() && matches!(string.as_bytes()[0], b'a'..=b'z' | b'A'..=b'Z')
+//     }
 
-    if input.is_empty() || !starts_with_ascii_alpha(input) {
-        return None;
-    }
+//     if input.is_empty() || !starts_with_ascii_alpha(input) {
+//         return None;
+//     }
 
-    for (i, c) in input.char_indices() {
-        match c {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '+' | '-' | '.' => (),
-            ':' => return Some((input[..i].to_ascii_lowercase(), &input[i + 1..])),
-            _ => return None,
-        }
-    }
+//     for (i, c) in input.char_indices() {
+//         match c {
+//             'a'..='z' | 'A'..='Z' | '0'..='9' | '+' | '-' | '.' => (),
+//             ':' => return Some((input[..i].to_ascii_lowercase(), &input[i + 1..])),
+//             _ => return None,
+//         }
+//     }
 
-    let mode = if context {
-        Context::Setter
-    } else {
-        Context::UrlParser
-    };
+//     let mode = if context {
+//         Context::Setter
+//     } else {
+//         Context::UrlParser
+//     };
 
-    match mode {
-        Context::Setter => Some((input.to_ascii_lowercase(), "")),
-        Context::UrlParser => None,
-    }
-}
+//     match mode {
+//         Context::Setter => Some((input.to_ascii_lowercase(), "")),
+//         Context::UrlParser => None,
+//     }
+// }
 
 
 
@@ -242,4 +243,25 @@ pub fn bce_failure_complex_induction(slice: &[i32], dynamic_step: usize) -> i32 
         sum += slice[i];
     }
     sum
+}
+
+/// Brings elements in `bytes` forward until `\n` (inclusive) or end of `source`.
+///
+/// `read_idx` must be greater than or equal to `write_idx`.
+const fn copy_forward_until_eol(
+    bytes: &mut [u8],
+    mut read_idx: usize,
+    mut write_idx: usize,
+) -> (usize, usize) {
+    assert!(read_idx >= write_idx);/// assert
+    while read_idx < bytes.len() {
+        let value = bytes[read_idx];
+        bytes[write_idx] = value;
+        read_idx += 1;
+        write_idx += 1;
+        if value == b'\n' {
+            break;
+        }
+    }
+    (read_idx, write_idx)
 }

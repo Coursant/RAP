@@ -175,6 +175,20 @@ python collect_popular_crates_bc_dataset.py \
   --timeout-sec 300
 ```
 
+Disk cleanup after each crate:
+
+After one crate finishes analysis, the collector removes the largest directory
+named `target` under that crate source tree. This happens after RAPx output has
+been copied into `raw_json/`, so generated bounds-check JSON is preserved while
+large build artifacts are reclaimed before the next crate starts.
+
+The per-crate status JSON records cleanup fields when a target directory is
+removed:
+
+- `removed_target_dir`
+- `removed_target_size_bytes`
+- `target_cleanup_error`, only when cleanup fails
+
 ## Function Testcase Extraction
 
 After `bounds_checks_dataset.json` has been generated, extract standalone
